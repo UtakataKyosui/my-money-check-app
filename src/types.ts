@@ -43,6 +43,11 @@ export interface ParsedFile {
    * 利用日から推定する。判定できなければ undefined。
    */
   paymentMonth?: string;
+  /**
+   * カードのみ: 見出し「◯月支払金額」の列の合計（この支払い月に実際に支払う金額、円）。
+   * 分割払いなどで支払総額の合計と異なる場合がある。paymentMonth が判定できたときだけ設定する。
+   */
+  paymentTotal?: number;
 }
 
 export interface MonthlySummary {
@@ -90,13 +95,21 @@ export interface ProvisionalPayment {
   note?: string;
   /** true なら、同じ支払いのCSVが読み込まれても暫定値を使い続ける（CSVによる置き換えを無効にする） */
   pinned?: boolean;
+  /** 実行時に導出される項目だけが true: 暫定値をCSVの金額で上書きした結果（保存はしない） */
+  fromCsv?: boolean;
 }
 
-/** CSVによって暫定値が置き換えられた（集計から外れた）項目 */
+/** CSVによって暫定値が置き換えられた項目 */
 export interface SupersededProvisional {
   item: ProvisionalPayment;
   /** 置き換えたCSVのファイル名 */
   by: string;
+  /**
+   * 暫定値をCSVの金額で上書きした導出項目（id は item と同じ、amount はCSVの支払額、
+   * confirmed は true、fromCsv は true）。カードのCSVで支払額が分かる場合だけ設定する。
+   * 銀行の置き換えでは、CSV側にその月の取引が実在するので設定しない。
+   */
+  replacement?: ProvisionalPayment;
 }
 
 export interface ProvisionalMonth {
