@@ -119,3 +119,38 @@ export interface ProvisionalMonth {
   estimated: number;
   count: number;
 }
+
+/** タグの色。実際の色は CSS 側で色名ごとに定義する（ライト/ダーク両対応）。 */
+export type TagColor = 'blue' | 'green' | 'orange' | 'red' | 'purple' | 'teal' | 'pink' | 'gray';
+
+export interface Tag {
+  id: string;
+  /** 表示名（例: 家賃、サブスク）。空でなく、他のタグと重複しない */
+  name: string;
+  color: TagColor;
+}
+
+/** 自動タグ付けのルール: 摘要に keyword が含まれる明細に tagId を付ける（NFKC正規化・大文字小文字無視の部分一致） */
+export interface TagRule {
+  id: string;
+  keyword: string;
+  tagId: string;
+}
+
+/**
+ * タグ・ルール・手動の上書きをまとめたもの。ブラウザーのlocalStorageに保存する（CSVの内容は保存しない）。
+ * overrides は「明細キー → そのタグ一覧」。存在する場合はルールより優先し、空配列は「タグなし」を意味する。
+ * 明細キーは取引なら `transactionKey`、暫定支払いなら `prov:<id>`。
+ */
+export interface TagStore {
+  tags: Tag[];
+  rules: TagRule[];
+  overrides: Record<string, string[]>;
+}
+
+/** タグ別の支出。tagId が null の行は「タグなし」。複数タグの明細は各タグに全額を計上する。 */
+export interface TagSummary {
+  tagId: string | null;
+  total: number;
+  count: number;
+}

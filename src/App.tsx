@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Filters, ParsedFile, ProvisionalPayment } from './types';
+import type { Filters, ParsedFile, ProvisionalPayment, TagStore } from './types';
 import { decodeCsv, parseCsvText } from './lib/parseFile';
 import {
   applyFilters,
@@ -24,6 +24,18 @@ import {
   saveProvisional,
   withProvisionalExpense,
 } from './lib/provisional';
+import {
+  UNTAGGED,
+  addRule,
+  loadTagStore,
+  matchesTagFilter,
+  provisionalKey,
+  saveTagStore,
+  setOverride,
+  summarizeByTag,
+  tagIdsFor,
+  transactionKey,
+} from './lib/tags';
 import { SAMPLE_BANK_CSV, SAMPLE_BANK_FILE_NAME, SAMPLE_CARD_CSV, SAMPLE_CARD_FILE_NAME } from './sampleData';
 import { UploadPanel } from './components/UploadPanel';
 import type { LoadMessage } from './components/UploadPanel';
@@ -37,9 +49,13 @@ import { TopExpenses } from './components/TopExpenses';
 import type { RankSource } from './components/TopExpenses';
 import { BalanceChart } from './components/BalanceChart';
 import { TransactionTable } from './components/TransactionTable';
+import { TagPanel } from './components/TagPanel';
+import { TagBreakdown } from './components/TagBreakdown';
+import type { RowTagActions } from './components/TagEditor';
 import { sourceLabel } from './components/labels';
 
 const DEFAULT_FILTERS: Filters = { months: [], sources: ['bank', 'card'], keyword: '' };
+const NO_TAG_IDS: string[] = [];
 
 interface Entry {
   fileName: string;
@@ -65,6 +81,8 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [rankSource, setRankSource] = useState<RankSource>('all');
   const [provisional, setProvisional] = useState<ProvisionalPayment[]>(() => loadProvisional());
+  const [tagStore, setTagStore] = useState<TagStore>(() => loadTagStore());
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
   const nextId = useRef(1);
   // ファイル名ごとの「有効な読み込み要求」。消去・削除・再入稿で無効になった要求の結果は捨てる。
   const pending = useRef(new Map<string, number>());
@@ -145,6 +163,7 @@ export default function App() {
     setFiles([]);
     setMessages([]);
     setFilters(DEFAULT_FILTERS);
+    setTagFilter([]);
   };
 
   // 手入力の暫定支払いは変更のたびにlocalStorageへ保存する（CSVは保存しない）
@@ -159,6 +178,32 @@ export default function App() {
   const deleteProvisional = (id: string) => commitProvisional(provisional.filter((p) => p.id !== id));
   const deleteAllProvisional = () => commitProvisional([]);
 
+  // タグ・ルール・手動の設定は変更のたびにlocalStorageへ保存する（CSVは保存しない）
+  const commitTags = (next: TagStore) => {
+    setTagStore(next);
+    saveTagStore(next);
+    // 削除されたタグは絞り込みの選択から外す
+    setTagFilter((prev) => {
+      const kept = prev.filter((id) => id === UNTAGGED || next.tags.some((t) => t.id === id));
+      return kept.length === prev.length ? prev : kept;
+    });
+  };
+  const tagging = useMemo<RowTagActions>(
+    () => ({
+      tags: tagStore.tags,
+      overrides: tagStore.overrides,
+      onSetOverride: (key, ids) => commitTags(setOverride(tagStore, key, ids)),
+      onAddRule: (keyword, tagId) => {
+        const result = addRule(tagStore, keyword, tagId);
+        if (!result.ok) return result.error;
+        commitTags(result.store);
+        return null;
+      },
+    }),
+    // commitTags は setter と引数だけを使うので、tagStore が変わったときだけ作り直せばよい
+    [tagStore],
+  );
+
   const all = useMemo(() => mergeTransactions(files), [files]);
   // CSVで置き換えられた暫定値は、カードならCSVの支払額で上書きし（支払い月の行を残す）、
   // 銀行なら集計から外す。集計には effective を使う（入力データ自体は provisional に残る）。
@@ -169,19 +214,48 @@ export default function App() {
     () => ({ ...filters, months: filters.months.filter((m) => months.includes(m)) }),
     [filters, months],
   );
-  const filtered = useMemo(() => applyFilters(all, effectiveFilters), [all, effectiveFilters]);
+  // 明細・暫定支払いごとのタグ（行単位に事前計算して、表や絞り込みで使い回す）
+  const txTagIds = useMemo(
+    () => new Map(all.map((t) => [t.id, tagIdsFor(tagStore, transactionKey(t), t.description)])),
+    [all, tagStore],
+  );
+  const provTagIds = useMemo(
+    () => new Map(provisional.map((p) => [p.id, tagIdsFor(tagStore, provisionalKey(p), p.label)])),
+    [provisional, tagStore],
+  );
+  // 削除済みのタグが選択に残らないようにする
+  const effectiveTagFilter = useMemo(
+    () => tagFilter.filter((id) => id === UNTAGGED || tagStore.tags.some((t) => t.id === id)),
+    [tagFilter, tagStore.tags],
+  );
+  // タグで絞り込んでいないときは、タグの変更で絞り込み結果（と表のページ位置）が変わらないようにする
+  const txTagIdsForFilter = effectiveTagFilter.length > 0 ? txTagIds : null;
+  const byFilters = useMemo(() => applyFilters(all, effectiveFilters), [all, effectiveFilters]);
+  const filtered = useMemo(
+    () =>
+      txTagIdsForFilter === null
+        ? byFilters
+        : byFilters.filter((t) => matchesTagFilter(txTagIdsForFilter.get(t.id) ?? NO_TAG_IDS, effectiveTagFilter)),
+    [byFilters, effectiveTagFilter, txTagIdsForFilter],
+  );
   const csvTotals = useMemo(() => totals(filtered), [filtered]);
   const bankExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'bank')).expense, [filtered]);
   const cardExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'card')).expense, [filtered]);
-  const filteredProvisional = useMemo(
-    () => filterProvisional(effective, effectiveFilters),
-    [effective, effectiveFilters],
-  );
+  const filteredProvisional = useMemo(() => {
+    const base = filterProvisional(effective, effectiveFilters);
+    return effectiveTagFilter.length === 0
+      ? base
+      : base.filter((p) => matchesTagFilter(provTagIds.get(p.id) ?? NO_TAG_IDS, effectiveTagFilter));
+  }, [effective, effectiveFilters, effectiveTagFilter, provTagIds]);
   // 概要カードの補足は、カードと同じ絞り込み条件で数える
   const supersededCount = useMemo(() => {
-    const ids = new Set(filterProvisional(superseded.map((s) => s.item), effectiveFilters).map((p) => p.id));
+    const ids = new Set(
+      filterProvisional(superseded.map((s) => s.item), effectiveFilters)
+        .filter((p) => matchesTagFilter(provTagIds.get(p.id) ?? NO_TAG_IDS, effectiveTagFilter))
+        .map((p) => p.id),
+    );
     return superseded.filter((s) => ids.has(s.item.id)).length;
-  }, [superseded, effectiveFilters]);
+  }, [superseded, effectiveFilters, effectiveTagFilter, provTagIds]);
   // 概要の注記用: 絞り込み後の集計のうち、CSVの支払額で上書きされた件数
   const csvOverriddenCount = useMemo(
     () => filteredProvisional.filter((p) => p.fromCsv).length,
@@ -214,15 +288,46 @@ export default function App() {
     [filtered, rankSource],
   );
 
+  // タグ別の支出: 絞り込み後のCSV取引（支出>0）と暫定支払い。支出合計と同じく、CSVの支払額で上書きした分（fromCsv）は含めない
+  const tagSummaries = useMemo(
+    () =>
+      summarizeByTag(
+        [
+          ...filtered.map((t) => ({ key: transactionKey(t), text: t.description, amount: t.expense })),
+          ...filteredProvisional
+            .filter((p) => !p.fromCsv)
+            .map((p) => ({ key: provisionalKey(p), text: p.label, amount: p.amount })),
+        ],
+        tagStore,
+      ),
+    [filtered, filteredProvisional, tagStore],
+  );
+  const toggleTagFilter = (id: string) =>
+    setTagFilter((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  // タグの管理パネル用: 読み込み中の明細のタグ別件数と、ルールのプレビューに使う摘要
+  const tagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const ids of [...txTagIds.values(), ...provTagIds.values()]) {
+      for (const id of ids) counts[id] = (counts[id] ?? 0) + 1;
+    }
+    return counts;
+  }, [txTagIds, provTagIds]);
+  const tagTexts = useMemo(
+    () => [...all.map((t) => t.description), ...provisional.map((p) => p.label)],
+    [all, provisional],
+  );
+
   const hasBank = files.some((f) => f.source === 'bank');
   const bankIncluded = effectiveFilters.sources.length === 0 || effectiveFilters.sources.includes('bank');
-  const balance = useMemo(
-    () =>
-      hasBank && bankIncluded
-        ? dailyBalance(applyFilters(all, { ...effectiveFilters, sources: ['bank'], keyword: '' }))
-        : [],
-    [all, effectiveFilters, hasBank, bankIncluded],
-  );
+  const balance = useMemo(() => {
+    if (!hasBank || !bankIncluded) return [];
+    const bank = applyFilters(all, { ...effectiveFilters, sources: ['bank'], keyword: '' });
+    return dailyBalance(
+      txTagIdsForFilter === null
+        ? bank
+        : bank.filter((t) => matchesTagFilter(txTagIdsForFilter.get(t.id) ?? NO_TAG_IDS, effectiveTagFilter)),
+    );
+  }, [all, effectiveFilters, hasBank, bankIncluded, effectiveTagFilter, txTagIdsForFilter]);
 
   return (
     <div className="app">
@@ -231,7 +336,7 @@ export default function App() {
         <p className="muted">
           銀行の口座明細CSVとカードの利用明細CSVを読み込んで、月別・摘要別に整理します。
           CSVのデータはこのブラウザの中だけで処理され、送信も保存もされません。
-          手入力した暫定支払いだけは、このブラウザのlocalStorageに保存されます。
+          手入力した暫定支払いと、タグ・ルール・手動のタグ設定だけは、このブラウザのlocalStorageに保存されます。
         </p>
       </header>
       <main>
@@ -251,10 +356,20 @@ export default function App() {
           onUpdate={updateProvisional}
           onDelete={deleteProvisional}
           onDeleteAll={deleteAllProvisional}
+          tagIds={provTagIds}
+          tagging={tagging}
         />
+        <TagPanel store={tagStore} counts={tagCounts} texts={tagTexts} onChange={commitTags} />
         {(files.length > 0 || provisional.length > 0) && (
           <>
-            <FilterBar months={months} filters={effectiveFilters} onChange={setFilters} />
+            <FilterBar
+              months={months}
+              filters={effectiveFilters}
+              onChange={setFilters}
+              tags={tagStore.tags}
+              tagFilter={effectiveTagFilter}
+              onTagFilterChange={setTagFilter}
+            />
             <SummaryCards
               totals={summary}
               bankExpense={bankExpense}
@@ -264,6 +379,13 @@ export default function App() {
               csvOverriddenCount={csvOverriddenCount}
               csvOverriddenTotal={csvOverriddenTotal}
             />
+            <TagBreakdown
+              tags={tagStore.tags}
+              summaries={tagSummaries}
+              expenseTotal={summary.expense}
+              selected={effectiveTagFilter}
+              onToggle={toggleTagFilter}
+            />
             <MonthlyTable rows={monthly} />
           </>
         )}
@@ -271,7 +393,7 @@ export default function App() {
           <>
             <TopExpenses groups={groups} source={rankSource} onSourceChange={setRankSource} />
             {hasBank && bankIncluded && <BalanceChart points={balance} />}
-            <TransactionTable transactions={filtered} />
+            <TransactionTable transactions={filtered} tagIds={txTagIds} tagging={tagging} />
           </>
         )}
       </main>

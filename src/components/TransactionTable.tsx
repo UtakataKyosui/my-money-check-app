@@ -1,7 +1,11 @@
-import { useMemo, useState } from 'react';
-import type { Transaction } from '../types';
+import { Fragment, useId, useMemo, useState } from 'react';
+import type { Tag, Transaction } from '../types';
 import { formatDate, formatYen } from '../lib/format';
+import { transactionKey } from '../lib/tags';
 import { sourceLabel } from './labels';
+import { TagChips } from './TagChips';
+import { TagEditor } from './TagEditor';
+import type { RowTagActions } from './TagEditor';
 
 export const PAGE_SIZE = 200;
 
@@ -10,7 +14,12 @@ type SortDir = 'asc' | 'desc';
 
 interface Props {
   transactions: Transaction[];
+  /** 取引ID → 付いているタグID（呼び出し側で useMemo により事前計算する） */
+  tagIds: ReadonlyMap<string, string[]>;
+  tagging: RowTagActions;
 }
+
+const NO_TAGS: string[] = [];
 
 function sortTransactions(txs: Transaction[], key: SortKey, dir: SortDir): Transaction[] {
   const sign = dir === 'asc' ? 1 : -1;
@@ -23,17 +32,35 @@ function sortTransactions(txs: Transaction[], key: SortKey, dir: SortDir): Trans
     .map((x) => x.tx);
 }
 
-export function TransactionTable({ transactions }: Props) {
+export function TransactionTable({ transactions, tagIds, tagging }: Props) {
+  const uid = useId();
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [prevTransactions, setPrevTransactions] = useState(transactions);
+  // タグ編集中の行（取引ID）
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // 絞り込みなどで明細が入れ替わったら、表示件数を先頭200件に戻す
   if (prevTransactions !== transactions) {
     setPrevTransactions(transactions);
     setLimit(PAGE_SIZE);
+    setEditingId(null);
   }
+
+  const tagsById = useMemo(() => new Map(tagging.tags.map((t) => [t.id, t])), [tagging.tags]);
+  const tagsOf = (id: string): Tag[] =>
+    (tagIds.get(id) ?? NO_TAGS).flatMap((tagId) => {
+      const tag = tagsById.get(tagId);
+      return tag ? [tag] : [];
+    });
+  const editButtonId = (id: string) => `${uid}-tag-btn-${id}`;
+  const editorId = (id: string) => `${uid}-tag-editor-${id}`;
+  const closeEditor = (id: string) => {
+    setEditingId(null);
+    // 閉じたら、開いた行の「タグを編集」ボタンへフォーカスを戻す
+    requestAnimationFrame(() => document.getElementById(editButtonId(id))?.focus());
+  };
 
   const sorted = useMemo(() => sortTransactions(transactions, sortKey, sortDir), [transactions, sortKey, sortDir]);
   const visible = sorted.slice(0, limit);
@@ -83,6 +110,7 @@ export function TransactionTable({ transactions }: Props) {
                   {header('date', '日付')}
                   <th scope="col">ソース</th>
                   <th scope="col">摘要</th>
+                  <th scope="col">タグ</th>
                   {header('expense', '支出', true)}
                   {header('income', '収入', true)}
                   <th scope="col" className="num">残高</th>
@@ -90,19 +118,53 @@ export function TransactionTable({ transactions }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {visible.map((tx) => (
-                  <tr key={tx.id}>
-                    <td className="nowrap">{formatDate(tx.date)}</td>
-                    <td>
-                      <span className={`badge badge-${tx.source}`}>{sourceLabel(tx.source)}</span>
-                    </td>
-                    <td className="desc">{tx.description}</td>
-                    <td className="num">{tx.expense > 0 ? formatYen(tx.expense) : ''}</td>
-                    <td className="num">{tx.income > 0 ? formatYen(tx.income) : ''}</td>
-                    <td className="num">{tx.balance !== undefined ? formatYen(tx.balance) : ''}</td>
-                    <td className="desc">{tx.note ?? ''}</td>
-                  </tr>
-                ))}
+                {visible.map((tx) => {
+                  const editing = editingId === tx.id;
+                  return (
+                    <Fragment key={tx.id}>
+                      <tr className={editing ? 'is-editing' : undefined}>
+                        <td className="nowrap">{formatDate(tx.date)}</td>
+                        <td>
+                          <span className={`badge badge-${tx.source}`}>{sourceLabel(tx.source)}</span>
+                        </td>
+                        <td className="desc">{tx.description}</td>
+                        <td className="tag-cell">
+                          <TagChips tags={tagsOf(tx.id)} />
+                          <button
+                            type="button"
+                            id={editButtonId(tx.id)}
+                            className="btn btn-small btn-ghost tag-edit-btn"
+                            aria-label={`${tx.description}のタグを編集`}
+                            aria-expanded={editing}
+                            aria-controls={editing ? editorId(tx.id) : undefined}
+                            onClick={() => (editing ? closeEditor(tx.id) : setEditingId(tx.id))}
+                          >
+                            タグを編集
+                          </button>
+                        </td>
+                        <td className="num">{tx.expense > 0 ? formatYen(tx.expense) : ''}</td>
+                        <td className="num">{tx.income > 0 ? formatYen(tx.income) : ''}</td>
+                        <td className="num">{tx.balance !== undefined ? formatYen(tx.balance) : ''}</td>
+                        <td className="desc">{tx.note ?? ''}</td>
+                      </tr>
+                      {editing && (
+                        <tr className="tag-editor-row">
+                          <td colSpan={8}>
+                            <TagEditor
+                              id={editorId(tx.id)}
+                              title={tx.description}
+                              actions={tagging}
+                              itemKey={transactionKey(tx)}
+                              currentIds={tagIds.get(tx.id) ?? NO_TAGS}
+                              ruleKeyword={tx.description}
+                              onClose={() => closeEditor(tx.id)}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
