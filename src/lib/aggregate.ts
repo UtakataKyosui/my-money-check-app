@@ -45,7 +45,53 @@ export function mergeTransactions(files: ParsedFile[]): Transaction[] {
       all.push(tx);
     }
   });
-  return all.sort(compareDate);
+  all.sort(compareDate);
+  return reorderBankWithinDay(all);
+}
+
+/**
+ * 同じ日の銀行取引を、残高の連鎖（前残高 = 残高 + 支出 - 収入）で時系列に並べ直す。
+ * 重複除去の結果、ファイル順が日内の時系列と一致しなくなるのを防ぐ。
+ * 連鎖がきれいに1本につながらない場合（残高なし・分岐など）は元の順序を保つ。
+ * 他のソースの取引が占めている位置は動かさない。
+ */
+function reorderBankWithinDay(sorted: Transaction[]): Transaction[] {
+  const result = [...sorted];
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i;
+    while (j < sorted.length && (sorted[j] as Transaction).date === (sorted[i] as Transaction).date) j++;
+    const slots: number[] = [];
+    for (let k = i; k < j; k++) if ((sorted[k] as Transaction).source === 'bank') slots.push(k);
+    if (slots.length > 1) {
+      const ordered = chainOrder(slots.map((k) => sorted[k] as Transaction));
+      if (ordered) slots.forEach((slot, n) => (result[slot] = ordered[n] as Transaction));
+    }
+    i = j;
+  }
+  return result;
+}
+
+function chainOrder(rows: Transaction[]): Transaction[] | null {
+  if (rows.some((r) => r.balance === undefined)) return null;
+  const before = (r: Transaction) => (r.balance as number) + r.expense - r.income;
+  const byBefore = new Map<number, Transaction[]>();
+  for (const r of rows) byBefore.set(before(r), [...(byBefore.get(before(r)) ?? []), r]);
+  const balances = new Set(rows.map((r) => r.balance as number));
+  // 先頭の行: その前残高が、同じ日のどの行の残高にもなっていない行
+  const starts = rows.filter((r) => !balances.has(before(r)));
+  if (starts.length !== 1) return null;
+  const ordered: Transaction[] = [];
+  const used = new Set<Transaction>();
+  let current: Transaction | undefined = starts[0];
+  while (current && !used.has(current)) {
+    ordered.push(current);
+    used.add(current);
+    const nexts: Transaction[] = (byBefore.get(current.balance as number) ?? []).filter((r) => !used.has(r));
+    if (nexts.length > 1) return null;
+    current = nexts[0];
+  }
+  return ordered.length === rows.length ? ordered : null;
 }
 
 /** 存在する月(YYYY-MM)を昇順・重複なしで返す。 */

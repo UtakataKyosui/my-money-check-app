@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import App from './App';
@@ -117,5 +117,47 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: 'すべて消去' }));
     expect(screen.getByRole('heading', { name: 'まずはCSVを読み込みましょう' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /を削除$/ })).not.toBeInTheDocument();
+  });
+  describe('読み込み中の消去・削除', () => {
+    /** arrayBuffer の完了を手動で制御できるファイル */
+    function slowFile(name: string, content: string) {
+      const file = csvFile(name, content);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const bytes = new TextEncoder().encode(content);
+      file.arrayBuffer = async () => {
+        await gate;
+        return bytes.buffer;
+      };
+      return { file, release: () => act(async () => { release(); await gate; }) };
+    }
+
+    it('読み込み中に「すべて消去」しても、完了後にデータが復活しない', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await loadSample(user);
+
+      const slow = slowFile('slow.csv', SAMPLE_BANK_CSV);
+      await user.upload(screen.getByLabelText('CSVファイルを選択'), slow.file);
+      await user.click(screen.getByRole('button', { name: 'すべて消去' }));
+      await slow.release();
+
+      expect(screen.getByRole('heading', { name: 'まずはCSVを読み込みましょう' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /を削除$/ })).not.toBeInTheDocument();
+    });
+
+    it('置換の読み込み中に削除しても、削除したファイルが復活しない', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.upload(screen.getByLabelText('CSVファイルを選択'), csvFile('bank.csv', SAMPLE_BANK_CSV));
+      await screen.findByRole('heading', { name: '明細' });
+
+      const slow = slowFile('bank.csv', SAMPLE_BANK_CSV);
+      await user.upload(screen.getByLabelText('CSVファイルを選択'), slow.file);
+      await user.click(screen.getByRole('button', { name: 'bank.csvを削除' }));
+      await slow.release();
+
+      expect(screen.getByRole('heading', { name: 'まずはCSVを読み込みましょう' })).toBeInTheDocument();
+    });
   });
 });

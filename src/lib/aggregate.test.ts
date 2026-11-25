@@ -328,3 +328,36 @@ describe('dailyBalance', () => {
     ]);
   });
 });
+
+describe('mergeTransactions: 重複除去後の日内の順序', () => {
+  const morning = { date: '2026-11-01', description: '朝', expense: 100, balance: 900 };
+  const afternoon = { date: '2026-11-01', description: '午後', expense: 100, balance: 800 };
+
+  it('部分エクスポート→全体エクスポートの順に入れても、日末残高は800になる', () => {
+    const partial = file('partial.csv', 'bank', [tx(afternoon)]);
+    const full = file('full.csv', 'bank', [tx(morning), tx(afternoon)]);
+    const merged = mergeTransactions([partial, full]);
+    expect(merged.map((t) => t.description)).toEqual(['朝', '午後']);
+    expect(dailyBalance(merged)).toEqual([{ date: '2026-11-01', balance: 800 }]);
+  });
+
+  it('新しい順に並んだファイルでも時系列に直す', () => {
+    const desc = file('desc.csv', 'bank', [tx(afternoon), tx(morning)]);
+    expect(mergeTransactions([desc]).map((t) => t.description)).toEqual(['朝', '午後']);
+  });
+
+  it('連鎖がつながらない場合は元の順序を保つ', () => {
+    const a = tx({ date: '2026-11-01', description: 'A', expense: 10, balance: 500 });
+    const b = tx({ date: '2026-11-01', description: 'B', expense: 10, balance: 300 });
+    expect(mergeTransactions([file('x.csv', 'bank', [a, b])]).map((t) => t.description)).toEqual(['A', 'B']);
+  });
+
+  it('カードの取引の位置は動かさない', () => {
+    const card = tx({ date: '2026-11-01', source: 'card', description: 'カード', expense: 50 });
+    const merged = mergeTransactions([
+      file('b.csv', 'bank', [tx(afternoon), tx(morning)]),
+      file('c.csv', 'card', [card]),
+    ]);
+    expect(merged.map((t) => t.description)).toEqual(['朝', '午後', 'カード']);
+  });
+});

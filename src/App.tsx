@@ -49,8 +49,17 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [rankSource, setRankSource] = useState<RankSource>('all');
   const nextId = useRef(1);
+  // ファイル名ごとの「有効な読み込み要求」。消去・削除・再入稿で無効になった要求の結果は捨てる。
+  const pending = useRef(new Map<string, number>());
+  const nextToken = useRef(1);
 
   async function ingest(entries: Entry[]) {
+    const tokens = new Map<string, number>();
+    for (const entry of entries) {
+      const token = nextToken.current++;
+      tokens.set(entry.fileName, token);
+      pending.current.set(entry.fileName, token);
+    }
     type Result = { fileName: string; parsed: ParsedFile; error?: undefined } | { fileName: string; error: string; parsed?: undefined };
     const results: Result[] = await Promise.all(
       entries.map(async (entry): Promise<Result> => {
@@ -66,9 +75,17 @@ export default function App() {
       }),
     );
 
+    // 読み込み中に消去・削除・同名の再入稿があった要求の結果は反映しない
+    const current = results.filter((r) => {
+      const valid = pending.current.get(r.fileName) === tokens.get(r.fileName);
+      if (valid) pending.current.delete(r.fileName);
+      return valid;
+    });
+    if (current.length === 0) return;
+
     const replaced = new Set(files.map((f) => f.fileName));
     const okFiles = new Map<string, ParsedFile>();
-    const newMessages: LoadMessage[] = results.map((r) => {
+    const newMessages: LoadMessage[] = current.map((r) => {
       const id = nextId.current++;
       if (r.parsed) {
         okFiles.set(r.fileName, r.parsed);
@@ -87,7 +104,7 @@ export default function App() {
     if (okFiles.size > 0) {
       setFiles((prev) => [...prev.filter((f) => !okFiles.has(f.fileName)), ...okFiles.values()]);
     }
-    const touched = new Set(results.map((r) => r.fileName));
+    const touched = new Set(current.map((r) => r.fileName));
     setMessages((prev) => [...prev.filter((m) => !touched.has(m.fileName)), ...newMessages]);
   }
 
@@ -101,11 +118,13 @@ export default function App() {
     ]);
 
   const removeFile = (fileName: string) => {
+    pending.current.delete(fileName);
     setFiles((prev) => prev.filter((f) => f.fileName !== fileName));
     setMessages((prev) => prev.filter((m) => m.fileName !== fileName));
   };
 
   const clearAll = () => {
+    pending.current.clear();
     setFiles([]);
     setMessages([]);
     setFilters(DEFAULT_FILTERS);
