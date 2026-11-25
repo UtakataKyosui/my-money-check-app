@@ -25,6 +25,8 @@ interface ProvisionalInput {
   kind?: 'カード' | '銀行' | 'その他';
   state?: '確定' | '見込み';
   note?: string;
+  /** 「CSVがあっても暫定値を使う（置き換えない）」をオンにする */
+  pinned?: boolean;
 }
 
 /** 暫定支払いフォームを入力して「追加」を押す */
@@ -35,6 +37,7 @@ async function addProvisional(user: User, input: ProvisionalInput) {
   if (input.kind) await user.click(screen.getByRole('radio', { name: input.kind }));
   if (input.state) await user.click(screen.getByRole('radio', { name: input.state }));
   if (input.note) await user.type(screen.getByLabelText('メモ（任意）'), input.note);
+  if (input.pinned) await user.click(screen.getByRole('checkbox', { name: /CSVがあっても暫定値を使う/ }));
   await user.click(screen.getByRole('button', { name: '追加' }));
 }
 
@@ -203,7 +206,10 @@ describe('暫定支払い（手入力）', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: '暫定支払い（手入力）' })).toBeInTheDocument();
     expect(screen.getByText(/楽天カードの今月の請求額/)).toBeInTheDocument();
-    expect(screen.getByText(/二重計上に注意/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/同じ支払いのCSV（カードは同じ支払い月のCSV、銀行はその月の取引を含むCSV）を読み込むと、CSVのデータが暫定値を置き換えます。置き換えられた暫定値は集計から外れ、CSVを削除すると元に戻ります。/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'CSVがあっても暫定値を使う（置き換えない）' })).not.toBeChecked();
     expect(screen.getByText(/localStorageに保存されます（CSVの内容は保存されません）/)).toBeInTheDocument();
     expect(screen.getByText('まだ暫定支払いは登録されていません。')).toBeInTheDocument();
     // 種別の既定はカード、状態の既定は確定
@@ -446,7 +452,8 @@ describe('暫定支払い（手入力）', () => {
     expect(screen.queryByRole('checkbox', { name: '2027年1月' })).not.toBeInTheDocument();
 
     await addProvisional(user, { month: '2027-01', label: '固定資産税', amount: '60000', kind: 'その他' });
-    await addProvisional(user, { month: '2026-11', label: '楽天カード', amount: '10000' });
+    // サンプルのカードCSVと同じ月のカード種別は置き換わるため、置き換えられない「その他」で入力する
+    await addProvisional(user, { month: '2026-11', label: '楽天カード', amount: '10000', kind: 'その他' });
     expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('70,000円');
 
     await user.click(screen.getByRole('checkbox', { name: '2027年1月' }));
@@ -469,5 +476,122 @@ describe('暫定支払い（手入力）', () => {
 
     await user.type(screen.getByRole('searchbox', { name: /キーワード/ }), '携帯');
     expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('5,000円');
+  });
+});
+
+describe('CSVによる暫定支払いの置き換え', () => {
+  const SUPERSEDED_NOTE = 'summary-provisional-superseded';
+
+  it('同じ支払い月のカードCSVを読み込むと暫定値が置き換わって集計から外れ、CSVを削除すると戻る', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '楽天カード 11月分', amount: '48500' });
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('48,500円');
+    expect(screen.queryByTestId(SUPERSEDED_NOTE)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '登録済み 1件' })).toBeInTheDocument();
+
+    await loadSample(user);
+
+    // 一覧には残り、置き換え済みであることが文言で分かる
+    const row = within(provisionalTable()).getByRole('row', { name: /楽天カード 11月分/ });
+    expect(row).toHaveTextContent('CSVで置き換え済み');
+    expect(row).toHaveTextContent('sample-card.csv');
+    expect(row).toHaveTextContent('集計対象外');
+    expect(row).toHaveTextContent('48,500円');
+    expect(screen.getByRole('heading', { name: '登録済み 1件（うちCSVで置き換え済み 1件）' })).toBeInTheDocument();
+
+    // 集計からは外れる
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('0円');
+    expect(screen.getByTestId('summary-provisional-confirmed')).toHaveTextContent('0円');
+    expect(screen.getByTestId(SUPERSEDED_NOTE)).toHaveTextContent('CSVで置き換え済み 1件（集計に含まれません）');
+    const monthly = screen.getByRole('region', { name: '月別サマリーの表' });
+    expect(within(monthly).getByRole('row', { name: /2026年11月/ })).not.toHaveTextContent('48,500円');
+
+    // CSVを削除すると暫定値が集計に戻る
+    await user.click(screen.getByRole('button', { name: 'sample-card.csvを削除' }));
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('48,500円');
+    expect(screen.queryByTestId(SUPERSEDED_NOTE)).not.toBeInTheDocument();
+    const restored = within(provisionalTable()).getByRole('row', { name: /楽天カード 11月分/ });
+    expect(restored).not.toHaveTextContent('CSVで置き換え済み');
+    expect(screen.getByRole('heading', { name: '登録済み 1件' })).toBeInTheDocument();
+    // 入力データ自体は消えていない
+    expect(JSON.parse(localStorage.getItem(PROVISIONAL_STORAGE_KEY) ?? 'null')).toHaveLength(1);
+  });
+
+  it('置き換わった月は月フィルタの候補・月別サマリーの暫定列にも出ない', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2027-03', label: '先の支払い', amount: '1000' });
+    await addProvisional(user, { month: '2026-11', label: '楽天カード', amount: '2000' });
+    await loadSample(user);
+
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('1,000円');
+    expect(screen.getByTestId(SUPERSEDED_NOTE)).toHaveTextContent('CSVで置き換え済み 1件');
+    const monthly = screen.getByRole('region', { name: '月別サマリーの表' });
+    expect(within(monthly).getByRole('row', { name: /2027年3月/ })).toHaveTextContent('1,000円');
+  });
+
+  it('種別「その他」は置き換わらない', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '自動車税', amount: '30500', kind: 'その他' });
+    await loadSample(user);
+
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('30,500円');
+    expect(screen.queryByTestId(SUPERSEDED_NOTE)).not.toBeInTheDocument();
+    expect(within(provisionalTable()).getByRole('row', { name: /自動車税/ })).not.toHaveTextContent('CSVで置き換え済み');
+  });
+
+  it('「CSVがあっても暫定値を使う」を付けると置き換わらず、バッジが出る。編集で切り替えられる', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '楽天カード', amount: '48500', pinned: true });
+    await loadSample(user);
+
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('48,500円');
+    expect(screen.queryByTestId(SUPERSEDED_NOTE)).not.toBeInTheDocument();
+    const row = within(provisionalTable()).getByRole('row', { name: /楽天カード/ });
+    expect(row).toHaveTextContent('暫定値を固定');
+    expect(row).not.toHaveTextContent('CSVで置き換え済み');
+    expect(JSON.parse(localStorage.getItem(PROVISIONAL_STORAGE_KEY) ?? 'null')[0].pinned).toBe(true);
+
+    // 編集で固定を外すと置き換わる
+    await user.click(screen.getByRole('button', { name: '楽天カードを編集' }));
+    const checkbox = screen.getByRole('checkbox', { name: /CSVがあっても暫定値を使う/ });
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('0円');
+    const replaced = within(provisionalTable()).getByRole('row', { name: /楽天カード/ });
+    expect(replaced).toHaveTextContent('CSVで置き換え済み');
+    expect(replaced).not.toHaveTextContent('暫定値を固定');
+
+    // 編集でもう一度固定すると集計に戻る
+    await user.click(screen.getByRole('button', { name: '楽天カードを編集' }));
+    await user.click(screen.getByRole('checkbox', { name: /CSVがあっても暫定値を使う/ }));
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('48,500円');
+  });
+
+  it('銀行種別は、その月の取引を含む銀行CSVで置き換わる（取引の無い月は置き換わらない）', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '家賃', amount: '85000', kind: '銀行' });
+    await addProvisional(user, { month: '2026-12', label: '12月の家賃', amount: '85000', kind: '銀行' });
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('170,000円');
+
+    await user.upload(screen.getByLabelText('CSVファイルを選択'), csvFile('bank.csv', SAMPLE_BANK_CSV));
+    await screen.findByRole('heading', { name: '明細' });
+
+    const replaced = within(provisionalTable()).getByRole('row', { name: /^2026年11月 家賃/ });
+    expect(replaced).toHaveTextContent('CSVで置き換え済み');
+    expect(replaced).toHaveTextContent('bank.csv');
+    expect(within(provisionalTable()).getByRole('row', { name: /12月の家賃/ })).not.toHaveTextContent('CSVで置き換え済み');
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('85,000円');
+    expect(screen.getByTestId(SUPERSEDED_NOTE)).toHaveTextContent('CSVで置き換え済み 1件（集計に含まれません）');
+
+    // 銀行CSVはカード種別の暫定値には影響しない
+    await addProvisional(user, { month: '2026-11', label: 'カード請求', amount: '1000' });
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('86,000円');
   });
 });
