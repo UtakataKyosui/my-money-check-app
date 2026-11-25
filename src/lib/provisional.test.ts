@@ -8,6 +8,7 @@ import {
   loadProvisional,
   mergeMonthlyWithProvisional,
   provisionalByMonth,
+  provisionalFromCsvByMonth,
   provisionalTotals,
   resolveProvisional,
   saveProvisional,
@@ -411,7 +412,7 @@ describe('mergeMonthlyWithProvisional / listAllMonths', () => {
       [{ month: '2026-10', total: 150, confirmed: 100, estimated: 50, count: 2 }],
     );
     expect(rows).toEqual([
-      { ...summary('2026-10'), provisional: 150, provisionalConfirmed: 100, provisionalEstimated: 50, provisionalCount: 2 },
+      { ...summary('2026-10'), provisional: 150, provisionalConfirmed: 100, provisionalEstimated: 50, provisionalCount: 2, provisionalFromCsv: 0 },
     ]);
   });
 
@@ -436,6 +437,7 @@ describe('mergeMonthlyWithProvisional / listAllMonths', () => {
       provisionalConfirmed: 90,
       provisionalEstimated: 0,
       provisionalCount: 1,
+      provisionalFromCsv: 0,
     });
     expect(rows[3]?.provisionalEstimated).toBe(10);
   });
@@ -509,6 +511,47 @@ describe('pinned（validate / load / save）', () => {
   });
 });
 
+describe('provisionalFromCsvByMonth と mergeMonthlyWithProvisional の CSV 由来分', () => {
+  const summary = (month: string): MonthlySummary => ({
+    month,
+    income: 0,
+    expense: 100,
+    net: -100,
+    bankExpense: 0,
+    cardExpense: 100,
+    count: 1,
+  });
+
+  it('fromCsv の項目だけを月ごとに合計する', () => {
+    const m = provisionalFromCsvByMonth([
+      item({ id: 'a', month: '2026-11', amount: 100, fromCsv: true }),
+      item({ id: 'b', month: '2026-11', amount: 50, fromCsv: true }),
+      item({ id: 'c', month: '2026-11', amount: 999 }),
+      item({ id: 'd', month: '2026-12', amount: 7, fromCsv: true }),
+    ]);
+    expect([...m.entries()]).toEqual([
+      ['2026-11', 150],
+      ['2026-12', 7],
+    ]);
+  });
+
+  it('月次の行に provisionalFromCsv として付与され、確定の内数のまま', () => {
+    const items = [item({ id: 'a', month: '2026-11', amount: 50000, confirmed: true, fromCsv: true })];
+    const rows = mergeMonthlyWithProvisional(
+      [summary('2026-10')],
+      provisionalByMonth(items),
+      provisionalFromCsvByMonth(items),
+    );
+    expect(rows.map((r) => r.month)).toEqual(['2026-10', '2026-11']);
+    expect(rows[1]).toMatchObject({
+      provisional: 50000,
+      provisionalConfirmed: 50000,
+      provisionalFromCsv: 50000,
+    });
+    expect(rows[0]?.provisionalFromCsv).toBe(0);
+  });
+});
+
 describe('resolveProvisional', () => {
   const tx = (source: 'bank' | 'card', month: string): Transaction => ({
     id: `${source}:${month}`,
@@ -525,19 +568,21 @@ describe('resolveProvisional', () => {
     source: 'bank' | 'card',
     months: string[],
     paymentMonth?: string,
+    paymentTotal?: number,
   ): ParsedFile => ({
     fileName,
     source,
     transactions: months.map((m) => tx(source, m)),
     warnings: [],
     ...(paymentMonth ? { paymentMonth } : {}),
+    ...(paymentTotal !== undefined ? { paymentTotal } : {}),
   });
   const prov = (id: string, over: Partial<ProvisionalPayment> = {}) =>
     item({ id, month: '2026-11', kind: 'card', ...over });
 
   it('ファイルが無ければすべて active', () => {
     const items = [prov('a'), prov('b', { kind: 'bank' })];
-    expect(resolveProvisional(items, [])).toEqual({ active: items, superseded: [] });
+    expect(resolveProvisional(items, [])).toEqual({ active: items, superseded: [], effective: items });
   });
 
   it('card: paymentMonth が一致するカードCSVで置き換える', () => {
@@ -545,6 +590,53 @@ describe('resolveProvisional', () => {
     const r = resolveProvisional([a], [file('card.csv', 'card', ['2026-10'], '2026-11')]);
     expect(r.active).toEqual([]);
     expect(r.superseded).toEqual([{ item: a, by: 'card.csv' }]);
+    // paymentTotal が分からないCSVでは上書きできず、集計からは外れる
+    expect(r.effective).toEqual([]);
+  });
+
+  it('card: paymentTotal があれば replacement（CSVの支払額で上書き）を付け、effective にその位置で差し込む', () => {
+    const a = prov('a', { amount: 48500, confirmed: false, note: 'メモ' });
+    const r = resolveProvisional([a], [file('card.csv', 'card', ['2026-10'], '2026-11', 50000)]);
+    expect(r.active).toEqual([]);
+    const replacement = { ...a, amount: 50000, confirmed: true, fromCsv: true };
+    expect(r.superseded).toEqual([{ item: a, by: 'card.csv', replacement }]);
+    expect(r.effective).toEqual([replacement]);
+    expect(r.superseded[0]?.replacement).not.toHaveProperty('pinned');
+    // 元の項目は変更しない
+    expect(a).toEqual(prov('a', { amount: 48500, confirmed: false, note: 'メモ' }));
+  });
+
+  it('card: paymentTotal が0でも replacement を付け、負なら amount は0に丸める', () => {
+    const a = prov('a');
+    const zero = resolveProvisional([a], [file('card.csv', 'card', [], '2026-11', 0)]);
+    expect(zero.effective).toEqual([{ ...a, amount: 0, confirmed: true, fromCsv: true }]);
+    const neg = resolveProvisional([a], [file('card.csv', 'card', [], '2026-11', -300)]);
+    expect(neg.superseded[0]?.replacement?.amount).toBe(0);
+    expect(neg.effective).toEqual([{ ...a, amount: 0, confirmed: true, fromCsv: true }]);
+  });
+
+  it('effective: 入力の並び順を保ち、card は replacement、bank は除外、pinned/other は active のまま', () => {
+    const items = [
+      prov('1', { month: '2026-12' }),
+      prov('2'),
+      prov('3', { kind: 'other' }),
+      prov('4', { kind: 'bank' }),
+      prov('5', { pinned: true }),
+      prov('6', { month: '2026-10' }),
+    ];
+    const files = [
+      file('c.csv', 'card', ['2026-10'], '2026-11', 7000),
+      file('b.csv', 'bank', ['2026-11']),
+    ];
+    const r = resolveProvisional(items, files);
+    expect(r.active.map((p) => p.id)).toEqual(['1', '3', '5', '6']);
+    expect(r.superseded.map((s) => s.item.id)).toEqual(['2', '4']);
+    expect(r.effective.map((p) => p.id)).toEqual(['1', '2', '3', '5', '6']);
+    expect(r.effective[1]).toMatchObject({ id: '2', amount: 7000, confirmed: true, fromCsv: true });
+    // active のものは同一の項目をそのまま使う
+    expect(r.effective[0]).toBe(items[0]);
+    expect(r.effective[2]).toBe(items[2]);
+    expect(r.effective[3]).toBe(items[4]);
   });
 
   it('card: 月が不一致 / paymentMonth なし / 銀行CSVでは置き換えない', () => {
@@ -554,7 +646,7 @@ describe('resolveProvisional', () => {
       file('c2.csv', 'card', ['2026-11']),
       file('b.csv', 'bank', ['2026-11'], '2026-11'),
     ];
-    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [], effective: [a] });
   });
 
   it('bank: 該当月の取引を含む銀行CSVで置き換える', () => {
@@ -562,6 +654,9 @@ describe('resolveProvisional', () => {
     const r = resolveProvisional([a], [file('bank.csv', 'bank', ['2026-10', '2026-11'])]);
     expect(r.active).toEqual([]);
     expect(r.superseded).toEqual([{ item: a, by: 'bank.csv' }]);
+    expect(r.superseded[0]).not.toHaveProperty('replacement');
+    // 銀行はその月の取引がCSVに実在するので、暫定値を外すだけ
+    expect(r.effective).toEqual([]);
   });
 
   it('bank: 該当月の取引が無い / カードCSVでは置き換えない', () => {
@@ -570,20 +665,20 @@ describe('resolveProvisional', () => {
       file('bank.csv', 'bank', ['2026-10', '2026-12']),
       file('card.csv', 'card', ['2026-11'], '2026-11'),
     ];
-    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [], effective: [a] });
   });
 
   it('other は常に active', () => {
     const a = prov('a', { kind: 'other' });
     const files = [file('b.csv', 'bank', ['2026-11']), file('c.csv', 'card', [], '2026-11')];
-    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [], effective: [a] });
   });
 
   it('pinned は常に active', () => {
     const a = prov('a', { pinned: true });
     const b = prov('b', { kind: 'bank', pinned: true });
     const files = [file('b.csv', 'bank', ['2026-11']), file('c.csv', 'card', [], '2026-11')];
-    expect(resolveProvisional([a, b], files)).toEqual({ active: [a, b], superseded: [] });
+    expect(resolveProvisional([a, b], files)).toEqual({ active: [a, b], superseded: [], effective: [a, b] });
   });
 
   it('複数ファイルが該当する場合は by がファイル名昇順で最初のもの', () => {

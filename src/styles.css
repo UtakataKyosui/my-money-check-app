@@ -568,7 +568,7 @@ input[type='month'] {
   margin-left: 4px;
 }
 
-/* CSVで置き換えられた暫定支払い: 薄く表示し、金額は取り消し線（文言「集計対象外」も併記） */
+/* CSVで置き換えられた暫定支払い: 薄く表示し、暫定値は取り消し線（集計に使うCSVの金額は文言で併記） */
 .prov-table tr.is-superseded > * {
   color: var(--muted);
   background: var(--surface-2);

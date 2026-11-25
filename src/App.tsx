@@ -17,6 +17,7 @@ import {
   loadProvisional,
   mergeMonthlyWithProvisional,
   provisionalByMonth,
+  provisionalFromCsvByMonth,
   provisionalTotals,
   resolveProvisional,
   saveProvisional,
@@ -157,9 +158,10 @@ export default function App() {
   const deleteAllProvisional = () => commitProvisional([]);
 
   const all = useMemo(() => mergeTransactions(files), [files]);
-  // CSVで置き換えられた暫定値は集計から外す（入力データ自体は provisional に残る）
-  const { active, superseded } = useMemo(() => resolveProvisional(provisional, files), [provisional, files]);
-  const months = useMemo(() => listAllMonths(listMonths(all), active), [all, active]);
+  // CSVで置き換えられた暫定値は、カードならCSVの支払額で上書きし（支払い月の行を残す）、
+  // 銀行なら集計から外す。集計には effective を使う（入力データ自体は provisional に残る）。
+  const { superseded, effective } = useMemo(() => resolveProvisional(provisional, files), [provisional, files]);
+  const months = useMemo(() => listAllMonths(listMonths(all), effective), [all, effective]);
   // ファイルを削除して存在しなくなった月が選択に残らないようにする
   const effectiveFilters = useMemo<Filters>(
     () => ({ ...filters, months: filters.months.filter((m) => months.includes(m)) }),
@@ -170,17 +172,31 @@ export default function App() {
   const bankExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'bank')).expense, [filtered]);
   const cardExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'card')).expense, [filtered]);
   const filteredProvisional = useMemo(
-    () => filterProvisional(active, effectiveFilters),
-    [active, effectiveFilters],
+    () => filterProvisional(effective, effectiveFilters),
+    [effective, effectiveFilters],
   );
   // 概要カードの補足は、カードと同じ絞り込み条件で数える
   const supersededCount = useMemo(() => {
     const ids = new Set(filterProvisional(superseded.map((s) => s.item), effectiveFilters).map((p) => p.id));
     return superseded.filter((s) => ids.has(s.item.id)).length;
   }, [superseded, effectiveFilters]);
+  // 概要の注記用: 絞り込み後の集計のうち、CSVの支払額で上書きされた件数
+  const csvOverriddenCount = useMemo(
+    () => filteredProvisional.filter((p) => p.fromCsv).length,
+    [filteredProvisional],
+  );
+  const csvOverriddenTotal = useMemo(
+    () => filteredProvisional.reduce((sum, p) => sum + (p.fromCsv ? p.amount : 0), 0),
+    [filteredProvisional],
+  );
   const provisionalSummary = useMemo(() => provisionalTotals(filteredProvisional), [filteredProvisional]);
   const monthly = useMemo(
-    () => mergeMonthlyWithProvisional(summarizeByMonth(filtered), provisionalByMonth(filteredProvisional)),
+    () =>
+      mergeMonthlyWithProvisional(
+        summarizeByMonth(filtered),
+        provisionalByMonth(filteredProvisional),
+        provisionalFromCsvByMonth(filteredProvisional),
+      ),
     [filtered, filteredProvisional],
   );
   const groups = useMemo(
@@ -235,6 +251,8 @@ export default function App() {
               cardExpense={cardExpense}
               provisional={provisionalSummary}
               supersededCount={supersededCount}
+              csvOverriddenCount={csvOverriddenCount}
+              csvOverriddenTotal={csvOverriddenTotal}
             />
             <MonthlyTable rows={monthly} />
           </>

@@ -21,11 +21,24 @@ interface Props {
   bankExpense: number;
   cardExpense: number;
   provisional: ProvisionalSummary;
-  /** CSVで置き換えられて集計から外れた暫定支払いの件数 */
+  /** CSVで置き換えられた暫定支払いの件数（CSVの支払額で上書きしたものを含む） */
   supersededCount?: number;
+  /** うち、CSVの支払額で上書きして集計に含めている件数と、その合計（円） */
+  csvOverriddenCount?: number;
+  csvOverriddenTotal?: number;
 }
 
-export function SummaryCards({ totals, bankExpense, cardExpense, provisional, supersededCount = 0 }: Props) {
+export function SummaryCards({
+  totals,
+  bankExpense,
+  cardExpense,
+  provisional,
+  supersededCount = 0,
+  csvOverriddenCount = 0,
+  csvOverriddenTotal = 0,
+}: Props) {
+  // 置き換えのうち、CSVの支払額での上書きができず暫定値を外したもの（銀行CSVなど）
+  const removedCount = Math.max(0, supersededCount - csvOverriddenCount);
   return (
     <section className="panel" aria-labelledby="summary-title">
       <h2 id="summary-title">概要（絞り込み後）</h2>
@@ -74,16 +87,22 @@ export function SummaryCards({ totals, bankExpense, cardExpense, provisional, su
           <dd data-testid="summary-provisional-estimated">{formatYen(provisional.estimated)}</dd>
         </div>
       </dl>
-      {supersededCount > 0 && (
+      {csvOverriddenCount > 0 && (
+        <p className="muted small prov-superseded-note" data-testid="summary-provisional-csv-override">
+          CSVの支払額で上書き {formatCount(csvOverriddenCount)}（合計 {formatYen(csvOverriddenTotal)}）:
+          暫定値の代わりにCSVの支払額を、支払い月の暫定支払いとして集計しています。「うち確定」に含まれます。
+        </p>
+      )}
+      {removedCount > 0 && (
         <p className="muted small prov-superseded-note" data-testid="summary-provisional-superseded">
-          CSVで置き換え済み {formatCount(supersededCount)}（集計に含まれません）
+          CSVで置き換え済み {formatCount(removedCount)}（集計に含まれません）
         </p>
       )}
       <p className="note" role="note">
         注意: 銀行口座からのカード代金の引き落としと、カードの利用明細は同じ支出を二重に数えることがあります。
         そのため、合算した支出合計と収支は「参考値」です。実際の支出は「銀行の支出」と「カードの支出」を見比べて判断してください。
         「暫定支払い（手入力）」は手入力した金額で、CSVの取引とは別に集計しています。収入・支出・銀行／カードの数値には含まれません。
-        同じ支払いのCSVを読み込むと、その暫定支払いはCSVのデータに置き換わり、この集計から外れます（CSVを削除すると元に戻ります）。
+        同じ支払いのCSVを読み込むと、カードの暫定支払いはCSVの支払額で上書きされ（支払い月の行に残ります）、銀行の暫定支払いはその月の取引がCSVにあるため集計から外れます（CSVを削除すると元に戻ります）。
       </p>
     </section>
   );

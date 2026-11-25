@@ -333,3 +333,80 @@ describe('parseCsvText: カードの paymentMonth', () => {
     expect(r).not.toHaveProperty('paymentMonth');
   });
 });
+
+describe('parseCsvText: カードの paymentTotal', () => {
+  const header = (payCol: string) =>
+    `"利用日","利用店名・商品名","利用者","支払方法","利用金額","手数料/利息","支払総額","${payCol}","当月請求額"`;
+  const row = (date: string, total: string, pay: string) =>
+    `"${date}","店","本人","1回払い","${total}","0","${total}","${pay}",""`;
+
+  it('「◯月支払金額」列の全行の合計を設定する', () => {
+    const csv = [header('11月支払金額'), row('2026/10/05', '1,000', '1,000'), row('2026/10/20', '2,500', '2,500')].join('\n');
+    const r = parseCsvText(csv, 'c.csv');
+    expect(r.paymentMonth).toBe('2026-11');
+    expect(r.paymentTotal).toBe(3500);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('分割払いなど、支払総額の合計と異なる場合は支払金額の合計を使う', () => {
+    const csv = [
+      header('11月支払金額'),
+      row('2026/10/03', '20,000', '20,000'),
+      row('2026/10/20', '32,000', '30,000'),
+      row('2026/10/25', '5,000', '0'),
+    ].join('\n');
+    const r = parseCsvText(csv, 'c.csv');
+    expect(r.transactions.reduce((sum, t) => sum + t.expense, 0)).toBe(57000);
+    expect(r.paymentTotal).toBe(50000);
+  });
+
+  it('空欄は0として数える', () => {
+    const csv = [header('11月支払金額'), row('2026/10/05', '1,000', ''), row('2026/10/20', '2,500', '2,500')].join('\n');
+    const r = parseCsvText(csv, 'c.csv');
+    expect(r.paymentTotal).toBe(2500);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it('負の金額（返金など）も合計に入り、0に丸めず保持する', () => {
+    const csv = [header('11月支払金額'), row('2026/10/05', '1,000', '1,000'), row('2026/10/20', '-3,000', '-3,000')].join('\n');
+    expect(parseCsvText(csv, 'c.csv').paymentTotal).toBe(-2000);
+  });
+
+  it('解釈できないセルはその行を警告して0として合計に入れる（取引は残る）', () => {
+    const csv = [header('11月支払金額'), row('2026/10/05', '1,000', '1,000'), row('2026/10/20', '2,500', 'あいう')].join('\n');
+    const r = parseCsvText(csv, 'c.csv');
+    expect(r.paymentTotal).toBe(1000);
+    expect(r.transactions).toHaveLength(2);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain('c.csv 3行目');
+    expect(r.warnings[0]).toContain('11月支払金額');
+    expect(r.warnings[0]).toContain('あいう');
+  });
+
+  it('読み飛ばした行（日付が不正）は合計に入れない', () => {
+    const csv = [header('11月支払金額'), row('2026/10/05', '1,000', '1,000'), row('bad', '2,500', '2,500')].join('\n');
+    const r = parseCsvText(csv, 'c.csv');
+    expect(r.paymentTotal).toBe(1000);
+    expect(r.warnings).toHaveLength(1);
+  });
+
+  it('paymentMonth が判定できなければ paymentTotal も設定しない', () => {
+    const noCol = parseCsvText([header('当月請求額2'), row('2026/10/05', '1,000', '1,000')].join('\n'), 'c.csv');
+    expect(noCol).not.toHaveProperty('paymentMonth');
+    expect(noCol).not.toHaveProperty('paymentTotal');
+    const noTx = parseCsvText(header('11月支払金額'), 'c.csv');
+    expect(noTx).not.toHaveProperty('paymentTotal');
+    const badMonth = parseCsvText([header('13月支払金額'), row('2026/10/05', '1,000', '1,000')].join('\n'), 'c.csv');
+    expect(badMonth).not.toHaveProperty('paymentTotal');
+  });
+
+  it('複数の「◯月支払金額」列があれば最初の列の合計を使う', () => {
+    const csv = `${header('11月支払金額')},"12月支払金額"\n${row('2026/10/05', '1,000', '400')},"900"`;
+    expect(parseCsvText(csv, 'c.csv').paymentTotal).toBe(400);
+  });
+
+  it('銀行CSVには設定しない', () => {
+    const r = parseCsvText(`${BANK_HEADER}\n2026/11/01,100,,振込,1000,,`, 'b.csv');
+    expect(r).not.toHaveProperty('paymentTotal');
+  });
+});

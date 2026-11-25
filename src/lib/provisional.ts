@@ -229,12 +229,25 @@ export interface MonthlyRow extends MonthlySummary {
   provisionalConfirmed: number;
   provisionalEstimated: number;
   provisionalCount: number;
+  /** provisionalConfirmed のうち、CSVの支払額で上書きした分（fromCsv）の合計 */
+  provisionalFromCsv: number;
+}
+
+/** fromCsv の項目（CSVの支払額で上書きしたもの）の金額を月ごとに合計する。 */
+export function provisionalFromCsvByMonth(items: ProvisionalPayment[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const p of items) {
+    if (p.fromCsv) map.set(p.month, (map.get(p.month) ?? 0) + p.amount);
+  }
+  return map;
 }
 
 /** CSV由来の月次集計と暫定支払いの月次集計を月の和集合で結合する（月昇順）。 */
 export function mergeMonthlyWithProvisional(
   monthly: MonthlySummary[],
   prov: ProvisionalMonth[],
+  /** 月ごとの CSV 由来の暫定支払いの合計（provisionalFromCsvByMonth の結果）。省略時は0 */
+  fromCsv: ReadonlyMap<string, number> = new Map(),
 ): MonthlyRow[] {
   const provByMonth = new Map(prov.map((p) => [p.month, p]));
   const monthlyByMonth = new Map(monthly.map((m) => [m.month, m]));
@@ -258,6 +271,7 @@ export function mergeMonthlyWithProvisional(
       provisionalConfirmed: p?.confirmed ?? 0,
       provisionalEstimated: p?.estimated ?? 0,
       provisionalCount: p?.count ?? 0,
+      provisionalFromCsv: fromCsv.get(month) ?? 0,
     };
   });
 }
@@ -271,26 +285,52 @@ export function listAllMonths(txMonths: string[], items: ProvisionalPayment[]): 
  * CSVに同じ支払いが含まれる暫定支払いを active から外し superseded に分ける。入力の並び順を保つ。
  * - pinned、または kind が 'other' は常に active。
  * - card: source が card で paymentMonth が一致するファイルがあれば置き換え（by はファイル名昇順で最初）。
+ *   そのファイルに paymentTotal があれば、replacement（暫定値をCSVの支払額で上書きした導出項目）を付ける。
  * - bank: source が bank で、その月の取引を1件でも含むファイルがあれば置き換え。
+ *   その月の取引がCSVに実在するので replacement は付けない。
+ *
+ * effective は集計に使う一覧: active はそのまま、置き換え済みで replacement があるものは
+ * その位置に replacement を入れ、replacement が無いもの（銀行）は含めない。
+ * 暫定支払いは支払い月で集計するのに対し、カードCSVの取引は利用月で集計されるため、
+ * カードの置き換えで暫定値を単に外すと、支払い月の行が消えてしまう。それを防ぐための上書き。
  */
 export function resolveProvisional(
   items: ProvisionalPayment[],
   files: ParsedFile[],
-): { active: ProvisionalPayment[]; superseded: SupersededProvisional[] } {
+): {
+  active: ProvisionalPayment[];
+  superseded: SupersededProvisional[];
+  effective: ProvisionalPayment[];
+} {
   const sorted = [...files].sort((a, b) => compareString(a.fileName, b.fileName));
   const active: ProvisionalPayment[] = [];
   const superseded: SupersededProvisional[] = [];
+  const effective: ProvisionalPayment[] = [];
   for (const item of items) {
-    let by: string | undefined;
+    let by: ParsedFile | undefined;
     if (!item.pinned && item.kind !== 'other') {
       by = sorted.find((f) =>
         item.kind === 'card'
           ? f.source === 'card' && f.paymentMonth === item.month
           : f.source === 'bank' && f.transactions.some((t) => t.month === item.month),
-      )?.fileName;
+      );
     }
-    if (by === undefined) active.push(item);
-    else superseded.push({ item, by });
+    if (by === undefined) {
+      active.push(item);
+      effective.push(item);
+      continue;
+    }
+    const entry: SupersededProvisional = { item, by: by.fileName };
+    if (item.kind === 'card' && by.paymentTotal !== undefined) {
+      entry.replacement = {
+        ...item,
+        amount: Math.max(0, by.paymentTotal),
+        confirmed: true,
+        fromCsv: true,
+      };
+      effective.push(entry.replacement);
+    }
+    superseded.push(entry);
   }
-  return { active, superseded };
+  return { active, superseded, effective };
 }

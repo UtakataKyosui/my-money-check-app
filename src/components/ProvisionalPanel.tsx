@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { ProvisionalKind, ProvisionalPayment, SupersededProvisional } from '../types';
 import { validateProvisionalInput } from '../lib/provisional';
-import { formatMonth, formatYen } from '../lib/format';
+import { formatMonth, formatSignedYen, formatYen } from '../lib/format';
 import { formatCount, provisionalKindLabel } from './labels';
 
 export type ProvisionalDraft = Omit<ProvisionalPayment, 'id'>;
@@ -10,7 +10,7 @@ export type ProvisionalDraft = Omit<ProvisionalPayment, 'id'>;
 interface Props {
   /** 登録済みの全件（置き換えられたものを含む） */
   items: ProvisionalPayment[];
-  /** CSVで置き換えられた項目（集計から外れている） */
+  /** CSVで置き換えられた項目（カードはCSVの支払額で上書きして集計、銀行は集計から外れる） */
   superseded?: SupersededProvisional[];
   onAdd: (value: ProvisionalDraft) => void;
   onUpdate: (item: ProvisionalPayment) => void;
@@ -57,8 +57,8 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
   };
 
   const editingItem = editingId === null ? undefined : items.find((i) => i.id === editingId);
-  const supersededBy = new Map(superseded.map((s) => [s.item.id, s.by]));
-  const supersededCount = items.filter((i) => supersededBy.has(i.id)).length;
+  const supersededById = new Map(superseded.map((s) => [s.item.id, s]));
+  const supersededCount = items.filter((i) => supersededById.has(i.id)).length;
   const sorted = [...items].sort((a, b) => a.month.localeCompare(b.month));
 
   const ids = {
@@ -154,7 +154,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
       <p className="muted prov-intro">
         CSVに含まれない確定済みの支払い金額（例: 楽天カードの今月の請求額）を入力できます。
         CSVの取引とは別枠で集計されます。
-        {'同じ支払いのCSV（カードは同じ支払い月のCSV、銀行はその月の取引を含むCSV）を読み込むと、CSVのデータが暫定値を置き換えます。置き換えられた暫定値は集計から外れ、CSVを削除すると元に戻ります。'}
+        {'同じ支払いのCSV（カードは同じ支払い月のCSV、銀行はその月の取引を含むCSV）を読み込むと、CSVのデータが暫定値を置き換えます。カードは支払い月の暫定支払いとしてCSVの支払額で上書きされ、銀行は暫定値が集計から外れます。CSVを削除すると元に戻ります。'}
         入力した内容はこのブラウザのlocalStorageに保存されます（CSVの内容は保存されません）。
       </p>
 
@@ -325,7 +325,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
         ) : (
           <>
             <p className="muted small">
-              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード）が反映されます。この一覧には登録済みのものをすべて表示します（CSVで置き換え済みのものは集計に含まれません）。
+              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード）が反映されます。この一覧には登録済みのものをすべて表示します（CSVで置き換え済みのカードは暫定値ではなくCSVの支払額を、銀行は何も集計しません）。
             </p>
             <div className="table-scroll" tabIndex={0} role="region" aria-label="暫定支払いの表">
               <table className="num-table prov-table">
@@ -341,7 +341,9 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                 </thead>
                 <tbody>
                   {sorted.map((item) => {
-                    const by = supersededBy.get(item.id);
+                    const sup = supersededById.get(item.id);
+                    const by = sup?.by;
+                    const replacement = sup?.replacement;
                     const rowClass = [item.id === editingId ? 'is-editing' : '', by !== undefined ? 'is-superseded' : '']
                       .filter(Boolean)
                       .join(' ');
@@ -359,7 +361,11 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                         {by !== undefined ? (
                           <>
                             <del>{formatYen(item.amount)}</del>
-                            <span className="cell-sub muted">集計対象外</span>
+                            <span className="cell-sub muted">
+                              {replacement
+                                ? `暫定値は集計対象外（CSVの支払額 ${formatYen(replacement.amount)}を集計）`
+                                : '集計対象外'}
+                            </span>
                           </>
                         ) : (
                           formatYen(item.amount)
@@ -376,6 +382,15 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                           <>
                             <span className="badge badge-superseded">CSVで置き換え済み</span>
                             <span className="cell-sub muted">置き換えたファイル: {by}</span>
+                            {replacement && (
+                              <span className="cell-sub">
+                                CSVの支払額: {formatYen(replacement.amount)}（暫定: {formatYen(item.amount)}、
+                                {replacement.amount === item.amount
+                                  ? '差額なし'
+                                  : `差額 ${formatSignedYen(replacement.amount - item.amount)}`}
+                                ）
+                              </span>
+                            )}
                           </>
                         )}
                       </td>

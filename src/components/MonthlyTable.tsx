@@ -46,6 +46,9 @@ export function MonthlyTable({ rows }: Props) {
                           確定 {formatYen(r.provisionalConfirmed)} / 見込み {formatYen(r.provisionalEstimated)}
                         </span>
                       )}
+                      {r.provisionalFromCsv > 0 && (
+                        <span className="cell-sub muted">CSV確定 {formatYen(r.provisionalFromCsv)}（確定に含む）</span>
+                      )}
                     </td>
                   </tr>
                 ))}
