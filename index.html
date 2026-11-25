@@ -4,57 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>明細チェック</title>
-  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main>
-    <header>
-      <h1>明細チェック</h1>
-      <p>三井住友銀行と楽天カードのCSVを読み込み、明細と合計を確認できます。</p>
-      <p>ファイルはブラウザー内で処理され、外部に送信・保存されません。</p>
-    </header>
-
-    <section class="upload" aria-labelledby="upload-title">
-      <h2 id="upload-title">CSVを読み込む</h2>
-      <label for="files">銀行またはカードのCSVを選択（複数選択可）</label>
-      <input id="files" type="file" accept=".csv,text/csv" multiple>
-      <p>同じ種類のCSVを再度選ぶと、その種類の表示が置き換わります。</p>
-      <div id="messages" role="status" aria-live="polite"></div>
-    </section>
-
-    <section id="bank" aria-labelledby="bank-title">
-      <div class="section-heading">
-        <h2 id="bank-title">三井住友銀行</h2>
-        <button type="button" class="clear" hidden>表示を消去</button>
-      </div>
-      <p class="filename">CSVは読み込まれていません。</p>
-      <div class="content" hidden>
-        <div class="totals">
-          <p>お引出し合計 <strong data-total="withdrawal"></strong></p>
-          <p>お預入れ合計 <strong data-total="deposit"></strong></p>
-        </div>
-        <p class="count"></p>
-        <div class="table-wrap"><table></table></div>
-      </div>
-    </section>
-
-    <section id="card" aria-labelledby="card-title">
-      <div class="section-heading">
-        <h2 id="card-title">楽天カード</h2>
-        <button type="button" class="clear" hidden>表示を消去</button>
-      </div>
-      <p class="filename">CSVは読み込まれていません。</p>
-      <div class="content" hidden>
-        <div class="totals">
-          <p>支払総額の合計 <strong data-total="payment"></strong></p>
-        </div>
-        <p>利用明細の「支払総額」の合計です。当月請求額とは異なる場合があります。</p>
-        <p class="count"></p>
-        <div class="table-wrap"><table></table></div>
-      </div>
-    </section>
-    <p>銀行の引き落としとカードの利用は重複する場合があるため、合算していません。</p>
-  </main>
-  <script type="module" src="app.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
 </body>
 </html>
