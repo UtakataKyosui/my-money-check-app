@@ -5,9 +5,17 @@ interface Props {
   rows: MonthlyDisplayRow[];
 }
 
+/**
+ * 支出バーに積む暫定支払い。CSVの支払額で上書きした分は、支出合計に加算されない（元のCSVの
+ * 利用明細が支出に入っている）ので、バーにも積まない。
+ */
+export function addedProvisional(r: MonthlyDisplayRow): number {
+  return Math.max(0, r.provisional - r.provisionalFromCsv);
+}
+
 /** CSSだけで描く簡易の横棒グラフ。数値は隣の表に同じものがあるため、読み上げ対象からは外す。 */
 export function MonthlyChart({ rows }: Props) {
-  const hasProvisional = rows.some((r) => r.provisional > 0);
+  const hasProvisional = rows.some((r) => addedProvisional(r) > 0);
   const max = Math.max(1, ...rows.flatMap((r) => [r.income, r.totalExpense]));
   const pct = (n: number) => `${Math.max(0, (n / max) * 100)}%`;
 
@@ -41,16 +49,13 @@ export function MonthlyChart({ rows }: Props) {
               <div className="bar-track">
                 {/* 支出バーは CSV の支出（銀行＋カード）に暫定支払いを積んだ合計の長さ */}
                 <div className="bar-stack" style={{ width: pct(r.totalExpense) }}>
-                  {r.totalExpense === 0 || r.expense > 0 ? (
-                    <div
-                      className="bar bar-expense"
-                      style={{ width: r.totalExpense === 0 ? '100%' : `${(r.expense / r.totalExpense) * 100}%` }}
-                    />
-                  ) : null}
-                  {r.provisional > 0 && (
+                  {r.totalExpense > 0 && r.expense > 0 && (
+                    <div className="bar bar-expense" style={{ width: `${(r.expense / r.totalExpense) * 100}%` }} />
+                  )}
+                  {r.totalExpense > 0 && addedProvisional(r) > 0 && (
                     <div
                       className="bar bar-provisional"
-                      style={{ width: `${(r.provisional / r.totalExpense) * 100}%` }}
+                      style={{ width: `${(addedProvisional(r) / r.totalExpense) * 100}%` }}
                     />
                   )}
                 </div>
