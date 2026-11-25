@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Filters, MonthlySummary, ParsedFile, ProvisionalPayment, Transaction } from '../types';
 import {
   PROVISIONAL_STORAGE_KEY,
+  combineTotals,
   createProvisionalId,
   filterProvisional,
   listAllMonths,
@@ -13,6 +14,7 @@ import {
   resolveProvisional,
   saveProvisional,
   validateProvisionalInput,
+  withProvisionalExpense,
 } from './provisional';
 
 const base = {
@@ -713,5 +715,100 @@ describe('resolveProvisional', () => {
     expect(r.superseded.map((s) => s.item.id)).toEqual(['2', '4']);
     expect(items).toEqual(copy);
     expect(files[0]?.fileName).toBe('c.csv');
+  });
+});
+
+describe('combineTotals', () => {
+  it('支出は CSV + 暫定、収支は 収入 − 支出。件数はCSVのまま', () => {
+    expect(combineTotals({ income: 560000, expense: 395750, count: 20 }, { total: 100000 })).toEqual({
+      income: 560000,
+      expense: 495750,
+      net: 64250,
+      count: 20,
+      provisionalExpense: 100000,
+    });
+  });
+
+  it('CSVが無く暫定だけなら、支出＝暫定、収支＝−暫定', () => {
+    expect(combineTotals({ income: 0, expense: 0, count: 0 }, { total: 169627 })).toEqual({
+      income: 0,
+      expense: 169627,
+      net: -169627,
+      count: 0,
+      provisionalExpense: 169627,
+    });
+  });
+
+  it('暫定が0なら CSV の合計と一致する', () => {
+    const r = combineTotals({ income: 100, expense: 30, count: 2 }, provisionalTotals([]));
+    expect(r).toMatchObject({ income: 100, expense: 30, net: 70, count: 2, provisionalExpense: 0 });
+  });
+
+  it('provisionalTotals の確定・見込みの合計（total）をそのまま使う', () => {
+    const items: ProvisionalPayment[] = [
+      { id: '1', month: '2026-11', label: 'a', amount: 100, kind: 'other', confirmed: true },
+      { id: '2', month: '2026-11', label: 'b', amount: 50, kind: 'other', confirmed: false },
+    ];
+    expect(combineTotals({ income: 0, expense: 10, count: 1 }, provisionalTotals(items)).expense).toBe(160);
+  });
+});
+
+describe('withProvisionalExpense', () => {
+  const summary = (month: string, over: Partial<MonthlySummary> = {}): MonthlySummary => ({
+    month,
+    income: 300,
+    expense: 200,
+    net: 100,
+    bankExpense: 120,
+    cardExpense: 80,
+    count: 5,
+    ...over,
+  });
+
+  it('各月の支出・収支に暫定を含め、CSV由来の列はそのまま残す。暫定のみの月も反映する', () => {
+    const rows = mergeMonthlyWithProvisional(
+      [summary('2026-10')],
+      [
+        { month: '2026-10', total: 150, confirmed: 100, estimated: 50, count: 2 },
+        { month: '2026-11', total: 90, confirmed: 90, estimated: 0, count: 1 },
+      ],
+    );
+    const out = withProvisionalExpense(rows);
+    expect(out[0]).toMatchObject({
+      month: '2026-10',
+      income: 300,
+      expense: 200,
+      net: 100,
+      bankExpense: 120,
+      cardExpense: 80,
+      provisional: 150,
+      totalExpense: 350,
+      totalNet: -50,
+    });
+    expect(out[1]).toMatchObject({ month: '2026-11', income: 0, expense: 0, totalExpense: 90, totalNet: -90 });
+  });
+
+  it('CSVの支払額で上書きした分（provisionalFromCsv）は支出・収支に加算しない（二重計上の回避）', () => {
+    const rows = mergeMonthlyWithProvisional(
+      [summary('2026-10', { expense: 200, cardExpense: 200, bankExpense: 0 })],
+      [
+        { month: '2026-10', total: 150, confirmed: 150, estimated: 0, count: 2 },
+        { month: '2026-11', total: 90, confirmed: 90, estimated: 0, count: 1 },
+      ],
+      new Map([['2026-10', 100], ['2026-11', 90]]),
+    );
+    const out = withProvisionalExpense(rows);
+    // 10月: 暫定150のうち100はCSV由来なので、加算されるのは50だけ
+    expect(out[0]).toMatchObject({ month: '2026-10', provisional: 150, provisionalFromCsv: 100, totalExpense: 250, totalNet: 50 });
+    // 11月: 暫定がすべてCSV由来なら、支出・収支は変わらない（行と表示だけ残る）
+    expect(out[1]).toMatchObject({ month: '2026-11', provisional: 90, provisionalFromCsv: 90, totalExpense: 0, totalNet: 0 });
+  });
+
+  it('暫定が無い月は CSV と同じ値で、入力は変更しない', () => {
+    const rows = mergeMonthlyWithProvisional([summary('2026-10')], []);
+    const copy = JSON.parse(JSON.stringify(rows));
+    const out = withProvisionalExpense(rows);
+    expect(out[0]).toMatchObject({ totalExpense: 200, totalNet: 100 });
+    expect(rows).toEqual(copy);
   });
 });

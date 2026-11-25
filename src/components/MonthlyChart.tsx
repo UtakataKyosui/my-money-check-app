@@ -1,18 +1,18 @@
 import { formatMonth, formatYen } from '../lib/format';
-import type { MonthlyRow } from '../lib/provisional';
+import type { MonthlyDisplayRow } from '../lib/provisional';
 
 interface Props {
-  rows: MonthlyRow[];
+  rows: MonthlyDisplayRow[];
 }
 
 /** CSSだけで描く簡易の横棒グラフ。数値は隣の表に同じものがあるため、読み上げ対象からは外す。 */
 export function MonthlyChart({ rows }: Props) {
   const hasProvisional = rows.some((r) => r.provisional > 0);
-  const max = Math.max(1, ...rows.flatMap((r) => [r.income, r.expense, r.provisional]));
+  const max = Math.max(1, ...rows.flatMap((r) => [r.income, r.totalExpense]));
   const pct = (n: number) => `${Math.max(0, (n / max) * 100)}%`;
 
   return (
-    <figure className="chart" aria-label="月別の収入・支出・暫定支払いの棒グラフ">
+    <figure className="chart" aria-label="月別の収入・支出の棒グラフ（支出には暫定支払いを含む）">
       <figcaption className="chart-legend">
         <span className="legend-item">
           <span className="swatch swatch-income" aria-hidden="true" />
@@ -25,7 +25,7 @@ export function MonthlyChart({ rows }: Props) {
         {hasProvisional && (
           <span className="legend-item">
             <span className="swatch swatch-provisional" aria-hidden="true" />
-            暫定支払い（手入力）
+            暫定支払い（手入力・支出に含む）
           </span>
         )}
       </figcaption>
@@ -39,15 +39,23 @@ export function MonthlyChart({ rows }: Props) {
                 <span className="bar-value">{formatYen(r.income)}</span>
               </div>
               <div className="bar-track">
-                <div className="bar bar-expense" style={{ width: pct(r.expense) }} />
-                <span className="bar-value">{formatYen(r.expense)}</span>
-              </div>
-              {hasProvisional && (
-                <div className="bar-track">
-                  <div className="bar bar-provisional" style={{ width: pct(r.provisional) }} />
-                  <span className="bar-value">{formatYen(r.provisional)}</span>
+                {/* 支出バーは CSV の支出（銀行＋カード）に暫定支払いを積んだ合計の長さ */}
+                <div className="bar-stack" style={{ width: pct(r.totalExpense) }}>
+                  {r.totalExpense === 0 || r.expense > 0 ? (
+                    <div
+                      className="bar bar-expense"
+                      style={{ width: r.totalExpense === 0 ? '100%' : `${(r.expense / r.totalExpense) * 100}%` }}
+                    />
+                  ) : null}
+                  {r.provisional > 0 && (
+                    <div
+                      className="bar bar-provisional"
+                      style={{ width: `${(r.provisional / r.totalExpense) * 100}%` }}
+                    />
+                  )}
                 </div>
-              )}
+                <span className="bar-value">{formatYen(r.totalExpense)}</span>
+              </div>
             </div>
           </div>
         ))}

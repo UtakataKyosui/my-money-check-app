@@ -734,6 +734,32 @@ tbody tr:last-child > * {
   max-width: calc(100% - 7rem);
 }
 
+.bar-stack {
+  display: flex;
+  flex: none;
+  min-width: 2px;
+  max-width: calc(100% - 7rem);
+  height: 14px;
+}
+
+.bar-stack .bar {
+  max-width: none;
+  min-width: 0;
+  border-radius: 0;
+}
+
+.bar-stack .bar:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.bar-stack .bar:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.bar-stack .bar:only-child {
+  border-radius: 3px;
+}
+
 .bar-value {
   font-size: 0.8rem;
   color: var(--muted);

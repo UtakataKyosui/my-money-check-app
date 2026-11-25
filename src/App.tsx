@@ -11,6 +11,7 @@ import {
   totals,
 } from './lib/aggregate';
 import {
+  combineTotals,
   createProvisionalId,
   filterProvisional,
   listAllMonths,
@@ -21,6 +22,7 @@ import {
   provisionalTotals,
   resolveProvisional,
   saveProvisional,
+  withProvisionalExpense,
 } from './lib/provisional';
 import { SAMPLE_BANK_CSV, SAMPLE_BANK_FILE_NAME, SAMPLE_CARD_CSV, SAMPLE_CARD_FILE_NAME } from './sampleData';
 import { UploadPanel } from './components/UploadPanel';
@@ -168,7 +170,7 @@ export default function App() {
     [filters, months],
   );
   const filtered = useMemo(() => applyFilters(all, effectiveFilters), [all, effectiveFilters]);
-  const summary = useMemo(() => totals(filtered), [filtered]);
+  const csvTotals = useMemo(() => totals(filtered), [filtered]);
   const bankExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'bank')).expense, [filtered]);
   const cardExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'card')).expense, [filtered]);
   const filteredProvisional = useMemo(
@@ -190,12 +192,20 @@ export default function App() {
     [filteredProvisional],
   );
   const provisionalSummary = useMemo(() => provisionalTotals(filteredProvisional), [filteredProvisional]);
+  // 概要の支出合計・収支は「CSVの支出 + 暫定支払い（effective。確定・見込みとも）」。
+  // CSVの支払額で上書きした分は、元のCSVの利用明細がすでに「カードの支出」に入っているため加算しない（二重計上を避ける）。
+  const summary = useMemo(
+    () => combineTotals(csvTotals, { total: provisionalSummary.total - csvOverriddenTotal }),
+    [csvTotals, provisionalSummary, csvOverriddenTotal],
+  );
   const monthly = useMemo(
     () =>
-      mergeMonthlyWithProvisional(
-        summarizeByMonth(filtered),
-        provisionalByMonth(filteredProvisional),
-        provisionalFromCsvByMonth(filteredProvisional),
+      withProvisionalExpense(
+        mergeMonthlyWithProvisional(
+          summarizeByMonth(filtered),
+          provisionalByMonth(filteredProvisional),
+          provisionalFromCsvByMonth(filteredProvisional),
+        ),
       ),
     [filtered, filteredProvisional],
   );

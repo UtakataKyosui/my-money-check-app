@@ -1,9 +1,9 @@
 import { formatMonth, formatSignedYen, formatYen } from '../lib/format';
-import type { MonthlyRow } from '../lib/provisional';
+import type { MonthlyDisplayRow } from '../lib/provisional';
 import { MonthlyChart } from './MonthlyChart';
 
 interface Props {
-  rows: MonthlyRow[];
+  rows: MonthlyDisplayRow[];
 }
 
 export function MonthlyTable({ rows }: Props) {
@@ -34,8 +34,8 @@ export function MonthlyTable({ rows }: Props) {
                   <tr key={r.month}>
                     <th scope="row">{formatMonth(r.month)}</th>
                     <td className="num">{formatYen(r.income)}</td>
-                    <td className="num">{formatYen(r.expense)}</td>
-                    <td className={`num ${r.net < 0 ? 'neg' : 'pos'}`}>{formatSignedYen(r.net)}</td>
+                    <td className="num">{formatYen(r.totalExpense)}</td>
+                    <td className={`num ${r.totalNet < 0 ? 'neg' : 'pos'}`}>{formatSignedYen(r.totalNet)}</td>
                     <td className="num">{formatYen(r.bankExpense)}</td>
                     <td className="num">{formatYen(r.cardExpense)}</td>
                     <td className="num">{r.count.toLocaleString('ja-JP')}</td>
@@ -55,6 +55,9 @@ export function MonthlyTable({ rows }: Props) {
               </tbody>
             </table>
           </div>
+          <p className="muted small">
+            支出（参考値）・収支（参考値）には「暫定支払い（手入力）」を含みます。銀行の支出・カードの支出はCSVの取引だけです。
+          </p>
         </>
       )}
     </section>
