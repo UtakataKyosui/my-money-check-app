@@ -1,0 +1,10 @@
+{
+  "name": "my-money-check-app",
+  "version": "1.0.0",
+  "description": "生活の資金繰りどうなってるかを確認するためのWebアプリ",
+  "scripts": {
+    "test": "node --test"
+  },
+  "private": true,
+  "type": "module"
+}
