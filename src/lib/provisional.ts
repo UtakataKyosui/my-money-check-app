@@ -4,6 +4,8 @@ import type {
   ProvisionalKind,
   ProvisionalMonth,
   ProvisionalPayment,
+  ParsedFile,
+  SupersededProvisional,
 } from '../types';
 
 export const PROVISIONAL_STORAGE_KEY = 'my-money-check:provisional:v1';
@@ -25,6 +27,7 @@ export interface ProvisionalInput {
   kind: ProvisionalKind;
   confirmed: boolean;
   note?: string;
+  pinned?: boolean;
 }
 
 export type ProvisionalValidation =
@@ -83,6 +86,7 @@ export function validateProvisionalInput(input: ProvisionalInput): ProvisionalVa
       kind: input.kind,
       confirmed: input.confirmed,
       note: note ? note : undefined,
+      ...(input.pinned ? { pinned: true } : {}),
     },
   };
 }
@@ -117,6 +121,7 @@ function toValidItem(raw: unknown): ProvisionalPayment | null {
   if (typeof r.kind !== 'string' || !KINDS.includes(r.kind as ProvisionalKind)) return null;
   if (typeof r.confirmed !== 'boolean') return null;
   if (r.note !== undefined && r.note !== null && typeof r.note !== 'string') return null;
+  if (r.pinned !== undefined && r.pinned !== null && typeof r.pinned !== 'boolean') return null;
   const note = typeof r.note === 'string' && r.note.trim() !== '' ? r.note : undefined;
   return {
     id: r.id,
@@ -126,6 +131,7 @@ function toValidItem(raw: unknown): ProvisionalPayment | null {
     kind: r.kind as ProvisionalKind,
     confirmed: r.confirmed,
     note,
+    ...(r.pinned === true ? { pinned: true } : {}),
   };
 }
 
@@ -259,4 +265,32 @@ export function mergeMonthlyWithProvisional(
 /** CSV由来の月と暫定支払いの月の和集合（昇順・重複なし）。 */
 export function listAllMonths(txMonths: string[], items: ProvisionalPayment[]): string[] {
   return [...new Set([...txMonths, ...items.map((p) => p.month)])].sort(compareString);
+}
+
+/**
+ * CSVに同じ支払いが含まれる暫定支払いを active から外し superseded に分ける。入力の並び順を保つ。
+ * - pinned、または kind が 'other' は常に active。
+ * - card: source が card で paymentMonth が一致するファイルがあれば置き換え（by はファイル名昇順で最初）。
+ * - bank: source が bank で、その月の取引を1件でも含むファイルがあれば置き換え。
+ */
+export function resolveProvisional(
+  items: ProvisionalPayment[],
+  files: ParsedFile[],
+): { active: ProvisionalPayment[]; superseded: SupersededProvisional[] } {
+  const sorted = [...files].sort((a, b) => compareString(a.fileName, b.fileName));
+  const active: ProvisionalPayment[] = [];
+  const superseded: SupersededProvisional[] = [];
+  for (const item of items) {
+    let by: string | undefined;
+    if (!item.pinned && item.kind !== 'other') {
+      by = sorted.find((f) =>
+        item.kind === 'card'
+          ? f.source === 'card' && f.paymentMonth === item.month
+          : f.source === 'bank' && f.transactions.some((t) => t.month === item.month),
+      )?.fileName;
+    }
+    if (by === undefined) active.push(item);
+    else superseded.push({ item, by });
+  }
+  return { active, superseded };
 }

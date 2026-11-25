@@ -73,6 +73,29 @@ function detectKind(header: string[]): SourceKind | null {
   return null;
 }
 
+/**
+ * カードCSVの支払い月（YYYY-MM）を、見出し「◯月支払金額」の月と取引の最終利用日から推定する。
+ * 利用日の年月 (Y, M) に対し、N >= M なら Y 年、N < M なら翌年。判定できなければ undefined。
+ * transactions は日付昇順であること。
+ */
+function detectPaymentMonth(header: string[], transactions: Transaction[]): string | undefined {
+  let n: number | null = null;
+  for (const h of header) {
+    const m = /^(\d{1,2})月支払金額$/.exec(h);
+    if (m) {
+      n = Number(m[1]);
+      break;
+    }
+  }
+  if (n === null || n < 1 || n > 12) return undefined;
+  const last = transactions[transactions.length - 1];
+  if (!last) return undefined;
+  const y = Number(last.month.slice(0, 4));
+  const mo = Number(last.month.slice(5, 7));
+  const year = n >= mo ? y : y + 1;
+  return `${String(year).padStart(4, '0')}-${String(n).padStart(2, '0')}`;
+}
+
 /** CSV文字列を取引に正規化する。見出し行から銀行/カードを自動判定する。 */
 export function parseCsvText(text: string, fileName: string): ParsedFile {
   const rows = parseCsv(text);
@@ -161,5 +184,10 @@ export function parseCsvText(text: string, fileName: string): ParsedFile {
   // Array.prototype.sort は安定なので、同日はファイル順が保たれる
   transactions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
-  return { fileName, source, transactions, warnings };
+  const result: ParsedFile = { fileName, source, transactions, warnings };
+  if (source === 'card') {
+    const paymentMonth = detectPaymentMonth(header, transactions);
+    if (paymentMonth) result.paymentMonth = paymentMonth;
+  }
+  return result;
 }
