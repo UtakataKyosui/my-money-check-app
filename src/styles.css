@@ -555,6 +555,33 @@ input[type='month'] {
   border-style: dashed;
 }
 
+.badge-pinned {
+  color: var(--provisional);
+}
+
+.badge-superseded {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.prov-table td .badge + .badge {
+  margin-left: 4px;
+}
+
+/* CSVで置き換えられた暫定支払い: 薄く表示し、金額は取り消し線（文言「集計対象外」も併記） */
+.prov-table tr.is-superseded > * {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.prov-table tr.is-superseded del {
+  text-decoration: line-through;
+}
+
+.prov-superseded-note {
+  margin: 0 0 12px;
+}
+
 /* ---- 表 ---- */
 .table-scroll {
   overflow-x: auto;

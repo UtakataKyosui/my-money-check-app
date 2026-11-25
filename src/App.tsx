@@ -18,6 +18,7 @@ import {
   mergeMonthlyWithProvisional,
   provisionalByMonth,
   provisionalTotals,
+  resolveProvisional,
   saveProvisional,
 } from './lib/provisional';
 import { SAMPLE_BANK_CSV, SAMPLE_BANK_FILE_NAME, SAMPLE_CARD_CSV, SAMPLE_CARD_FILE_NAME } from './sampleData';
@@ -156,7 +157,9 @@ export default function App() {
   const deleteAllProvisional = () => commitProvisional([]);
 
   const all = useMemo(() => mergeTransactions(files), [files]);
-  const months = useMemo(() => listAllMonths(listMonths(all), provisional), [all, provisional]);
+  // CSVで置き換えられた暫定値は集計から外す（入力データ自体は provisional に残る）
+  const { active, superseded } = useMemo(() => resolveProvisional(provisional, files), [provisional, files]);
+  const months = useMemo(() => listAllMonths(listMonths(all), active), [all, active]);
   // ファイルを削除して存在しなくなった月が選択に残らないようにする
   const effectiveFilters = useMemo<Filters>(
     () => ({ ...filters, months: filters.months.filter((m) => months.includes(m)) }),
@@ -167,9 +170,14 @@ export default function App() {
   const bankExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'bank')).expense, [filtered]);
   const cardExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'card')).expense, [filtered]);
   const filteredProvisional = useMemo(
-    () => filterProvisional(provisional, effectiveFilters),
-    [provisional, effectiveFilters],
+    () => filterProvisional(active, effectiveFilters),
+    [active, effectiveFilters],
   );
+  // 概要カードの補足は、カードと同じ絞り込み条件で数える
+  const supersededCount = useMemo(() => {
+    const ids = new Set(filterProvisional(superseded.map((s) => s.item), effectiveFilters).map((p) => p.id));
+    return superseded.filter((s) => ids.has(s.item.id)).length;
+  }, [superseded, effectiveFilters]);
   const provisionalSummary = useMemo(() => provisionalTotals(filteredProvisional), [filteredProvisional]);
   const monthly = useMemo(
     () => mergeMonthlyWithProvisional(summarizeByMonth(filtered), provisionalByMonth(filteredProvisional)),
@@ -212,6 +220,7 @@ export default function App() {
         {files.length === 0 && <EmptyState onLoadSample={loadSample} />}
         <ProvisionalPanel
           items={provisional}
+          superseded={superseded}
           onAdd={addProvisional}
           onUpdate={updateProvisional}
           onDelete={deleteProvisional}
@@ -225,6 +234,7 @@ export default function App() {
               bankExpense={bankExpense}
               cardExpense={cardExpense}
               provisional={provisionalSummary}
+              supersededCount={supersededCount}
             />
             <MonthlyTable rows={monthly} />
           </>

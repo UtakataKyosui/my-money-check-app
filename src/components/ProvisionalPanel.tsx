@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { ProvisionalKind, ProvisionalPayment } from '../types';
+import type { ProvisionalKind, ProvisionalPayment, SupersededProvisional } from '../types';
 import { validateProvisionalInput } from '../lib/provisional';
 import { formatMonth, formatYen } from '../lib/format';
 import { formatCount, provisionalKindLabel } from './labels';
@@ -8,7 +8,10 @@ import { formatCount, provisionalKindLabel } from './labels';
 export type ProvisionalDraft = Omit<ProvisionalPayment, 'id'>;
 
 interface Props {
+  /** 登録済みの全件（置き換えられたものを含む） */
   items: ProvisionalPayment[];
+  /** CSVで置き換えられた項目（集計から外れている） */
+  superseded?: SupersededProvisional[];
   onAdd: (value: ProvisionalDraft) => void;
   onUpdate: (item: ProvisionalPayment) => void;
   onDelete: (id: string) => void;
@@ -22,6 +25,7 @@ interface FormState {
   kind: ProvisionalKind;
   confirmed: boolean;
   note: string;
+  pinned: boolean;
 }
 
 type FieldName = 'month' | 'label' | 'amount';
@@ -37,10 +41,10 @@ function currentMonth(): string {
 }
 
 function emptyForm(): FormState {
-  return { month: currentMonth(), label: '', amount: '', kind: 'card', confirmed: true, note: '' };
+  return { month: currentMonth(), label: '', amount: '', kind: 'card', confirmed: true, note: '', pinned: false };
 }
 
-export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll }: Props) {
+export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDelete, onDeleteAll }: Props) {
   const uid = useId();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -53,6 +57,8 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
   };
 
   const editingItem = editingId === null ? undefined : items.find((i) => i.id === editingId);
+  const supersededBy = new Map(superseded.map((s) => [s.item.id, s.by]));
+  const supersededCount = items.filter((i) => supersededBy.has(i.id)).length;
   const sorted = [...items].sort((a, b) => a.month.localeCompare(b.month));
 
   const ids = {
@@ -60,6 +66,8 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
     label: `${uid}-label`,
     amount: `${uid}-amount`,
     note: `${uid}-note`,
+    pinned: `${uid}-pinned`,
+    pinnedHint: `${uid}-pinned-hint`,
     monthHint: `${uid}-month-hint`,
     amountHint: `${uid}-amount-hint`,
     monthError: `${uid}-month-error`,
@@ -90,6 +98,7 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
       kind: form.kind,
       confirmed: form.confirmed,
       note: form.note,
+      pinned: form.pinned,
     });
     if (!result.ok) {
       setErrors(result.errors);
@@ -117,6 +126,7 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
       kind: item.kind,
       confirmed: item.confirmed,
       note: item.note ?? '',
+      pinned: item.pinned ?? false,
     });
     setErrors({});
     setStatus('');
@@ -143,7 +153,8 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
       <h2 id="provisional-title">暫定支払い（手入力）</h2>
       <p className="muted prov-intro">
         CSVに含まれない確定済みの支払い金額（例: 楽天カードの今月の請求額）を入力できます。
-        CSVの取引とは別枠で集計され、二重計上に注意してください。
+        CSVの取引とは別枠で集計されます。
+        {'同じ支払いのCSV（カードは同じ支払い月のCSV、銀行はその月の取引を含むCSV）を読み込むと、CSVのデータが暫定値を置き換えます。置き換えられた暫定値は集計から外れ、CSVを削除すると元に戻ります。'}
         入力した内容はこのブラウザのlocalStorageに保存されます（CSVの内容は保存されません）。
       </p>
 
@@ -265,6 +276,21 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
               onChange={(e) => setField('note', e.target.value)}
             />
           </div>
+
+          <div className="field prov-wide">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={form.pinned}
+                aria-describedby={ids.pinnedHint}
+                onChange={(e) => setField('pinned', e.target.checked)}
+              />
+              CSVがあっても暫定値を使う（置き換えない）
+            </label>
+            <p id={ids.pinnedHint} className="muted small field-hint">
+              オンにすると、同じ支払いのCSVを読み込んでもこの暫定値を集計に使い続けます。
+            </p>
+          </div>
         </div>
 
         <div className="prov-actions">
@@ -284,7 +310,10 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
 
       <div className="prov-list">
         <div className="file-list-head">
-          <h3>登録済みの暫定支払い（{formatCount(items.length)}）</h3>
+          <h3>
+            登録済み {formatCount(items.length)}
+            {supersededCount > 0 && `（うちCSVで置き換え済み ${formatCount(supersededCount)}）`}
+          </h3>
           {items.length > 0 && (
             <button type="button" className="btn btn-small btn-ghost" onClick={handleDeleteAll}>
               暫定支払いをすべて削除
@@ -296,7 +325,7 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
         ) : (
           <>
             <p className="muted small">
-              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード）が反映されます。この一覧には登録済みのものをすべて表示します。
+              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード）が反映されます。この一覧には登録済みのものをすべて表示します（CSVで置き換え済みのものは集計に含まれません）。
             </p>
             <div className="table-scroll" tabIndex={0} role="region" aria-label="暫定支払いの表">
               <table className="num-table prov-table">
@@ -311,8 +340,13 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
                   </tr>
                 </thead>
                 <tbody>
-                  {sorted.map((item) => (
-                    <tr key={item.id} className={item.id === editingId ? 'is-editing' : undefined}>
+                  {sorted.map((item) => {
+                    const by = supersededBy.get(item.id);
+                    const rowClass = [item.id === editingId ? 'is-editing' : '', by !== undefined ? 'is-superseded' : '']
+                      .filter(Boolean)
+                      .join(' ');
+                    return (
+                    <tr key={item.id} className={rowClass || undefined}>
                       <th scope="row" className="nowrap">{formatMonth(item.month)}</th>
                       <td className="desc">
                         {item.label}
@@ -321,11 +355,29 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
                       <td>
                         <span className={`badge badge-kind-${item.kind}`}>{provisionalKindLabel(item.kind)}</span>
                       </td>
-                      <td className="num">{formatYen(item.amount)}</td>
+                      <td className="num">
+                        {by !== undefined ? (
+                          <>
+                            <del>{formatYen(item.amount)}</del>
+                            <span className="cell-sub muted">集計対象外</span>
+                          </>
+                        ) : (
+                          formatYen(item.amount)
+                        )}
+                      </td>
                       <td>
                         <span className={`badge ${item.confirmed ? 'badge-confirmed' : 'badge-estimated'}`}>
                           {item.confirmed ? '確定' : '見込み'}
                         </span>
+                        {item.pinned && (
+                          <span className="badge badge-pinned">暫定値を固定</span>
+                        )}
+                        {by !== undefined && (
+                          <>
+                            <span className="badge badge-superseded">CSVで置き換え済み</span>
+                            <span className="cell-sub muted">置き換えたファイル: {by}</span>
+                          </>
+                        )}
                       </td>
                       <td className="prov-row-actions">
                         <button
@@ -346,7 +398,8 @@ export function ProvisionalPanel({ items, onAdd, onUpdate, onDelete, onDeleteAll
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

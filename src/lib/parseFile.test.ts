@@ -274,3 +274,62 @@ describe('parseCsvText: カードの返金', () => {
     expect(r.transactions[0]).toMatchObject({ expense: 0, income: 2000, usageAmount: -2000 });
   });
 });
+
+describe('parseCsvText: カードの paymentMonth', () => {
+  const header = (payCol: string) =>
+    `"利用日","利用店名・商品名","利用者","支払方法","利用金額","手数料/利息","支払総額","${payCol}","当月請求額"`;
+  const row = (date: string) => `"${date}","店","本人","1回払い","100","0","100","100",""`;
+
+  it('見出しの月と利用日から支払い月を推定する（利用日が10月まで・11月支払金額 → 11月）', () => {
+    const r = parseCsvText([header('11月支払金額'), row('2026/10/05'), row('2026/10/20')].join('\n'), 'c.csv');
+    expect(r.paymentMonth).toBe('2026-11');
+  });
+
+  it('見出しの月 = 最終利用月ならその年', () => {
+    const r = parseCsvText([header('11月支払金額'), row('2026/11/03')].join('\n'), 'c.csv');
+    expect(r.paymentMonth).toBe('2026-11');
+  });
+
+  it('年またぎ: 利用日が12月まで・1月支払金額 → 翌年1月', () => {
+    const r = parseCsvText([header('1月支払金額'), row('2026/12/01'), row('2026/12/25')].join('\n'), 'c.csv');
+    expect(r.paymentMonth).toBe('2027-01');
+  });
+
+  it('全角数字の見出し・複数一致は最初の列を使う', () => {
+    const h = `${header('１２月支払金額')},"1月支払金額"`;
+    const r = parseCsvText(`${h}\n${row('2026/11/05')},"100"`, 'c.csv');
+    expect(r.paymentMonth).toBe('2026-12');
+  });
+
+  it('最終日付で判定する（日付順に並べ替えた後の最後）', () => {
+    const r = parseCsvText([header('1月支払金額'), row('2026/12/20'), row('2026/11/02')].join('\n'), 'c.csv');
+    expect(r.paymentMonth).toBe('2027-01');
+  });
+
+  it('該当列が無ければ paymentMonth プロパティを出さない', () => {
+    const r = parseCsvText([header('当月請求額2'), row('2026/10/05')].join('\n'), 'c.csv');
+    expect(r).not.toHaveProperty('paymentMonth');
+  });
+
+  it('月が1〜12でなければ設定しない', () => {
+    for (const col of ['0月支払金額', '13月支払金額', '99月支払金額']) {
+      const r = parseCsvText([header(col), row('2026/10/05')].join('\n'), 'c.csv');
+      expect(r).not.toHaveProperty('paymentMonth');
+    }
+  });
+
+  it('取引が0件なら設定しない', () => {
+    const r = parseCsvText(header('11月支払金額'), 'c.csv');
+    expect(r.source).toBe('card');
+    expect(r).not.toHaveProperty('paymentMonth');
+    const skipped = parseCsvText([header('11月支払金額'), row('bad')].join('\n'), 'c.csv');
+    expect(skipped.transactions).toEqual([]);
+    expect(skipped).not.toHaveProperty('paymentMonth');
+  });
+
+  it('銀行CSVには設定しない', () => {
+    const r = parseCsvText(`${BANK_HEADER}\n2026/11/01,100,,振込,1000,,`, 'b.csv');
+    expect(r.source).toBe('bank');
+    expect(r).not.toHaveProperty('paymentMonth');
+  });
+});

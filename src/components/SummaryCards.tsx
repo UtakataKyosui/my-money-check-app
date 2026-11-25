@@ -21,9 +21,11 @@ interface Props {
   bankExpense: number;
   cardExpense: number;
   provisional: ProvisionalSummary;
+  /** CSVで置き換えられて集計から外れた暫定支払いの件数 */
+  supersededCount?: number;
 }
 
-export function SummaryCards({ totals, bankExpense, cardExpense, provisional }: Props) {
+export function SummaryCards({ totals, bankExpense, cardExpense, provisional, supersededCount = 0 }: Props) {
   return (
     <section className="panel" aria-labelledby="summary-title">
       <h2 id="summary-title">概要（絞り込み後）</h2>
@@ -72,11 +74,16 @@ export function SummaryCards({ totals, bankExpense, cardExpense, provisional }: 
           <dd data-testid="summary-provisional-estimated">{formatYen(provisional.estimated)}</dd>
         </div>
       </dl>
+      {supersededCount > 0 && (
+        <p className="muted small prov-superseded-note" data-testid="summary-provisional-superseded">
+          CSVで置き換え済み {formatCount(supersededCount)}（集計に含まれません）
+        </p>
+      )}
       <p className="note" role="note">
         注意: 銀行口座からのカード代金の引き落としと、カードの利用明細は同じ支出を二重に数えることがあります。
         そのため、合算した支出合計と収支は「参考値」です。実際の支出は「銀行の支出」と「カードの支出」を見比べて判断してください。
         「暫定支払い（手入力）」は手入力した金額で、CSVの取引とは別に集計しています。収入・支出・銀行／カードの数値には含まれません。
-        同じ支払いがCSVにも載ったときは、二重計上にならないよう暫定支払いの方を削除してください。
+        同じ支払いのCSVを読み込むと、その暫定支払いはCSVのデータに置き換わり、この集計から外れます（CSVを削除すると元に戻ります）。
       </p>
     </section>
   );

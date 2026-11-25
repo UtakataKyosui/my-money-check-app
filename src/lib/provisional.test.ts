@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Filters, MonthlySummary, ProvisionalPayment } from '../types';
+import type { Filters, MonthlySummary, ParsedFile, ProvisionalPayment, Transaction } from '../types';
 import {
   PROVISIONAL_STORAGE_KEY,
   createProvisionalId,
@@ -9,6 +9,7 @@ import {
   mergeMonthlyWithProvisional,
   provisionalByMonth,
   provisionalTotals,
+  resolveProvisional,
   saveProvisional,
   validateProvisionalInput,
 } from './provisional';
@@ -470,5 +471,152 @@ describe('mergeMonthlyWithProvisional / listAllMonths', () => {
     expect(listAllMonths(['2026-11', '2026-10', '2026-11'], items)).toEqual(['2026-10', '2026-11', '2026-12']);
     expect(listAllMonths([], [])).toEqual([]);
     expect(listAllMonths(['2026-01'], [])).toEqual(['2026-01']);
+  });
+});
+
+describe('pinned（validate / load / save）', () => {
+  it('pinned: true は value に含まれ、false/未指定ではプロパティ自体が出ない', () => {
+    expect(valueOf({ ...base, pinned: true })).toHaveProperty('pinned', true);
+    expect(valueOf({ ...base, pinned: false })).not.toHaveProperty('pinned');
+    expect(valueOf(base)).not.toHaveProperty('pinned');
+  });
+
+  it('save → load で pinned: true が保たれる', () => {
+    const data = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, v),
+    };
+    saveProvisional([item({ id: 'p', pinned: true }), item({ id: 'q' })], storage);
+    const loaded = loadProvisional(storage);
+    expect(loaded[0]).toHaveProperty('pinned', true);
+    expect(loaded[1]).not.toHaveProperty('pinned');
+  });
+
+  it('load: pinned: false / null は出さず、boolean 以外の要素は無視する', () => {
+    const raw = [
+      { ...item({ id: 'f' }), pinned: false },
+      { ...item({ id: 'n' }), pinned: null },
+      { ...item({ id: 'bad1' }), pinned: 'yes' },
+      { ...item({ id: 'bad2' }), pinned: 1 },
+      { ...item({ id: 't' }), pinned: true },
+    ];
+    const loaded = loadProvisional({ getItem: () => JSON.stringify(raw) });
+    expect(loaded.map((p) => p.id)).toEqual(['f', 'n', 't']);
+    expect(loaded[0]).not.toHaveProperty('pinned');
+    expect(loaded[1]).not.toHaveProperty('pinned');
+    expect(loaded[2]).toHaveProperty('pinned', true);
+  });
+});
+
+describe('resolveProvisional', () => {
+  const tx = (source: 'bank' | 'card', month: string): Transaction => ({
+    id: `${source}:${month}`,
+    source,
+    date: `${month}-01`,
+    month,
+    description: 'x',
+    expense: 100,
+    income: 0,
+    fileName: 'f.csv',
+  });
+  const file = (
+    fileName: string,
+    source: 'bank' | 'card',
+    months: string[],
+    paymentMonth?: string,
+  ): ParsedFile => ({
+    fileName,
+    source,
+    transactions: months.map((m) => tx(source, m)),
+    warnings: [],
+    ...(paymentMonth ? { paymentMonth } : {}),
+  });
+  const prov = (id: string, over: Partial<ProvisionalPayment> = {}) =>
+    item({ id, month: '2026-11', kind: 'card', ...over });
+
+  it('ファイルが無ければすべて active', () => {
+    const items = [prov('a'), prov('b', { kind: 'bank' })];
+    expect(resolveProvisional(items, [])).toEqual({ active: items, superseded: [] });
+  });
+
+  it('card: paymentMonth が一致するカードCSVで置き換える', () => {
+    const a = prov('a');
+    const r = resolveProvisional([a], [file('card.csv', 'card', ['2026-10'], '2026-11')]);
+    expect(r.active).toEqual([]);
+    expect(r.superseded).toEqual([{ item: a, by: 'card.csv' }]);
+  });
+
+  it('card: 月が不一致 / paymentMonth なし / 銀行CSVでは置き換えない', () => {
+    const a = prov('a');
+    const files = [
+      file('c1.csv', 'card', ['2026-11'], '2026-12'),
+      file('c2.csv', 'card', ['2026-11']),
+      file('b.csv', 'bank', ['2026-11'], '2026-11'),
+    ];
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+  });
+
+  it('bank: 該当月の取引を含む銀行CSVで置き換える', () => {
+    const a = prov('a', { kind: 'bank' });
+    const r = resolveProvisional([a], [file('bank.csv', 'bank', ['2026-10', '2026-11'])]);
+    expect(r.active).toEqual([]);
+    expect(r.superseded).toEqual([{ item: a, by: 'bank.csv' }]);
+  });
+
+  it('bank: 該当月の取引が無い / カードCSVでは置き換えない', () => {
+    const a = prov('a', { kind: 'bank' });
+    const files = [
+      file('bank.csv', 'bank', ['2026-10', '2026-12']),
+      file('card.csv', 'card', ['2026-11'], '2026-11'),
+    ];
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+  });
+
+  it('other は常に active', () => {
+    const a = prov('a', { kind: 'other' });
+    const files = [file('b.csv', 'bank', ['2026-11']), file('c.csv', 'card', [], '2026-11')];
+    expect(resolveProvisional([a], files)).toEqual({ active: [a], superseded: [] });
+  });
+
+  it('pinned は常に active', () => {
+    const a = prov('a', { pinned: true });
+    const b = prov('b', { kind: 'bank', pinned: true });
+    const files = [file('b.csv', 'bank', ['2026-11']), file('c.csv', 'card', [], '2026-11')];
+    expect(resolveProvisional([a, b], files)).toEqual({ active: [a, b], superseded: [] });
+  });
+
+  it('複数ファイルが該当する場合は by がファイル名昇順で最初のもの', () => {
+    const a = prov('a');
+    const b = prov('b', { kind: 'bank' });
+    const files = [
+      file('z.csv', 'card', [], '2026-11'),
+      file('m.csv', 'bank', ['2026-11']),
+      file('a.csv', 'card', [], '2026-11'),
+      file('c.csv', 'bank', ['2026-11']),
+    ];
+    const r = resolveProvisional([a, b], files);
+    expect(r.superseded).toEqual([
+      { item: a, by: 'a.csv' },
+      { item: b, by: 'c.csv' },
+    ]);
+  });
+
+  it('active / superseded とも入力の並び順を保ち、入力配列を変更しない', () => {
+    const items = [
+      prov('1', { month: '2026-12' }),
+      prov('2'),
+      prov('3', { kind: 'other' }),
+      prov('4'),
+      prov('5', { pinned: true }),
+      prov('6', { month: '2026-10' }),
+    ];
+    const copy = [...items];
+    const files = [file('c.csv', 'card', [], '2026-11')];
+    const r = resolveProvisional(items, files);
+    expect(r.active.map((p) => p.id)).toEqual(['1', '3', '5', '6']);
+    expect(r.superseded.map((s) => s.item.id)).toEqual(['2', '4']);
+    expect(items).toEqual(copy);
+    expect(files[0]?.fileName).toBe('c.csv');
   });
 });
