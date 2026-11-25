@@ -48,10 +48,12 @@ function provisionalTable() {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   vi.restoreAllMocks();
 });
 

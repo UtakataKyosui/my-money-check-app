@@ -1170,3 +1170,209 @@ tbody tr:last-child > * {
     transition: none !important;
   }
 }
+
+/* ---- データの取得元・Notion ---- */
+.app-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.link-btn {
+  all: unset;
+  display: inline;
+  cursor: pointer;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin: 0 2px;
+  border-radius: 2px;
+}
+
+.link-btn:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.data-source .field-hint {
+  margin-top: 8px;
+}
+
+input[type='password'] {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.notion-intro,
+.upload-help {
+  margin: 0 0 12px;
+}
+
+.notion-form {
+  display: grid;
+  gap: 14px;
+  max-width: 640px;
+}
+
+.notion-statuses {
+  margin-top: 12px;
+}
+
+.notion-statuses .messages {
+  margin-top: 0;
+}
+
+.notion-details {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+  font-size: 0.9rem;
+}
+
+/* ---- ヘルプ（モーダル） ---- */
+.help-dialog {
+  width: min(960px, calc(100vw - 24px));
+  max-width: none;
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.help-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.help-dialog::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.help-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: calc(100dvh - 24px);
+}
+
+.help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.help-head h2 {
+  margin: 0;
+}
+
+.help-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.help-tab {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.help-tab[aria-selected='true'] {
+  color: var(--text);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+.help-panel {
+  padding: 16px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  min-height: 0;
+}
+
+.help-panel > :first-child {
+  margin-top: 0;
+}
+
+.help-panel h3 {
+  margin: 0 0 8px;
+  font-size: 1.1rem;
+}
+
+.help-panel h4 {
+  margin: 20px 0 8px;
+  font-size: 1rem;
+}
+
+.help-panel code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.help-table th,
+.help-table td {
+  vertical-align: top;
+}
+
+.help-table tbody th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.help-spec-table {
+  min-width: 860px;
+}
+
+.help-spec-table td:nth-child(6) {
+  min-width: 16rem;
+}
+
+.help-types {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help-steps {
+  padding-left: 1.4em;
+}
+
+.help-steps li {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 480px) {
+  .help-head,
+  .help-tabs {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .help-panel {
+    padding: 12px;
+  }
+}

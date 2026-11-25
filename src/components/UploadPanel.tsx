@@ -1,6 +1,7 @@
 import { useId, useState } from 'react';
 import type { DragEvent } from 'react';
 import type { ParsedFile } from '../types';
+import type { HelpTabId } from '../help';
 import { formatCount, sourceLabel } from './labels';
 
 export interface LoadMessage {
@@ -18,11 +19,13 @@ interface Props {
   onDismissMessage: (id: number) => void;
   onRemoveFile: (fileName: string) => void;
   onClear: () => void;
+  /** ヘルプの該当タブを開く（CSVの形式の案内用） */
+  onOpenHelp?: (tab: HelpTabId) => void;
 }
 
 const MAX_WARNINGS_SHOWN = 5;
 
-export function UploadPanel({ messages, files, onFiles, onDismissMessage, onRemoveFile, onClear }: Props) {
+export function UploadPanel({ messages, files, onFiles, onDismissMessage, onRemoveFile, onClear, onOpenHelp }: Props) {
   const inputId = useId();
   const [dragging, setDragging] = useState(false);
 
@@ -36,6 +39,15 @@ export function UploadPanel({ messages, files, onFiles, onDismissMessage, onRemo
   return (
     <section className="panel" aria-labelledby="upload-title">
       <h2 id="upload-title">CSVを読み込む</h2>
+      {onOpenHelp && (
+        <p className="muted small upload-help">
+          対応するCSVの見出しや形式は、
+          <button type="button" className="link-btn" onClick={() => onOpenHelp('csv')}>
+            CSVの形式
+          </button>
+          で確認できます。
+        </p>
+      )}
       <div
         className={`dropzone${dragging ? ' is-dragging' : ''}`}
         onDragOver={(e) => {
