@@ -262,3 +262,15 @@ describe('parseCsvText: 不正CSV', () => {
     expect(() => parseCsvText('"年月日,お引出し\n1,2', 'x.csv')).toThrow(/引用符/);
   });
 });
+
+describe('parseCsvText: カードの返金', () => {
+  it('負の支払総額は支出ではなく収入として計上し、警告を出さない', () => {
+    const csv = [
+      CARD_HEADER,
+      '"2026/11/05","返金ショップ","本人","1回払い","-2,000","0","-2,000","-2,000","-2,000","",""',
+    ].join('\n');
+    const r = parseCsvText(csv, 'refund.csv');
+    expect(r.warnings).toEqual([]);
+    expect(r.transactions[0]).toMatchObject({ expense: 0, income: 2000, usageAmount: -2000 });
+  });
+});

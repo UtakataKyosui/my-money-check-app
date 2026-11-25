@@ -133,20 +133,23 @@ export function parseCsvText(text: string, fileName: string): ParsedFile {
         label: cell('ラベル').trim() || undefined,
       });
     } else {
-      const usage = parseAmount(cell('利用金額'));
-      const fee = parseAmount(cell('手数料/利息'));
-      const total = parseAmount(cell('支払総額'));
+      // 返金などの負の金額も受け付ける
+      const usage = parseAmount(cell('利用金額'), true);
+      const fee = parseAmount(cell('手数料/利息'), true);
+      const total = parseAmount(cell('支払総額'), true);
       const bad = usage === null ? '利用金額' : fee === null ? '手数料/利息' : total === null ? '支払総額' : null;
       if (bad || usage === null || fee === null || total === null) {
         warnings.push(`${where}: 金額（${bad}）を解釈できないため読み飛ばしました。`);
         continue;
       }
       const totalEmpty = cell('支払総額').trim() === '';
+      const net = totalEmpty ? usage + fee : total;
       transactions.push({
         ...base,
         description: cell('利用店名・商品名').trim(),
-        expense: totalEmpty ? usage + fee : total,
-        income: 0,
+        // 返金（負の金額）は収入側に計上する
+        expense: Math.max(net, 0),
+        income: Math.max(-net, 0),
         note: cell('利用者').trim() || undefined,
         paymentMethod: cell('支払方法').trim() || undefined,
         usageAmount: usage,

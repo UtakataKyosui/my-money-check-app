@@ -15,7 +15,7 @@ export interface Transaction {
   description: string;
   /** 支出額（正の整数。銀行はお引出し、カードは支払総額） */
   expense: number;
-  /** 収入額（正の整数。銀行はお預入れ。カードは常に0） */
+  /** 収入額（正の整数。銀行はお預入れ。カードは返金など負の支払総額の絶対値、それ以外は0） */
   income: number;
   /** 銀行のみ: 取引後残高 */
   balance?: number;
