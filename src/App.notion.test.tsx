@@ -420,6 +420,46 @@ describe('Notionからの取得', () => {
     await waitFor(() => expect(within(statusList()).getByText(/4行を取得し/)).toBeInTheDocument());
   });
 
+  it('A→B→Aと読み込むと、キャッシュが残っていても、Aを取り直して最新の内容を表示する', async () => {
+    const user = userEvent.setup();
+    const BANK2_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const BANK2_URL = `https://www.notion.so/workspace/${BANK2_ID.replace(/-/g, '')}`;
+    const dbs: Record<string, RelayDb> = {
+      [BANK_ID]: { schema: BANK_SCHEMA, pages: BANK_PAGES },
+      [BANK2_ID]: { schema: BANK_SCHEMA, pages: [[bankRow('別口座の給与', '2026-11-05', null, 111000, 1)]] },
+    };
+    const { calls } = createRelay(dbs);
+    const bankField = () => screen.getByLabelText('銀行のデータベースのURLまたはID');
+    const setBank = async (value: string) => {
+      await user.clear(bankField());
+      await user.click(bankField());
+      await user.paste(value);
+    };
+    const bankCalls = (id: string) => calls.filter((c) => c.body.databaseId === id).length;
+
+    render(<App />);
+    await chooseNotion(user);
+    await fillNotion(user, { token: TOKEN, bank: BANK_URL });
+    await user.click(screen.getByRole('button', { name: 'Notionから読み込む' }));
+    await screen.findByRole('heading', { name: '明細' });
+    await waitFor(() => expect(screen.getByTestId('summary-income')).toHaveTextContent('280,000円'));
+    expect(bankCalls(BANK_ID)).toBe(2); // 2ページ
+
+    // B を読み込む（A のキャッシュは残る）
+    await setBank(BANK2_URL);
+    await user.click(screen.getByRole('button', { name: /読み込む|再読み込み/ }));
+    await waitFor(() => expect(screen.getByTestId('summary-income')).toHaveTextContent('111,000円'));
+
+    // その間に Notion 側で A の内容が変わった
+    dbs[BANK_ID] = { schema: BANK_SCHEMA, pages: [[bankRow('給与', '2026-11-05', null, 290000, 1)]] };
+
+    // A を読み込み直す: キャッシュから古い内容を出さず、取り直す
+    await setBank(BANK_URL);
+    await user.click(screen.getByRole('button', { name: /読み込む|再読み込み/ }));
+    await waitFor(() => expect(screen.getByTestId('summary-income')).toHaveTextContent('290,000円'));
+    expect(bankCalls(BANK_ID)).toBe(3); // 最初の2ページ + 取り直しの1ページ
+  });
+
   it('自動では再取得しない（ウィンドウのフォーカス・再接続）', async () => {
     const user = userEvent.setup();
     const { fetchMock } = goodRelay();

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchNotionDatabase } from '../lib/notion';
 import type { ParsedFile } from '../types';
 
@@ -115,6 +115,7 @@ function useNotionDatabase(kind: Kind, databaseId: string | null, tokenRef: { cu
  * 取得結果は ParsedFile[]（CSVと同じ形）で返すので、集計はCSVと同じ経路で動く。
  */
 export function useNotionData(): UseNotionData {
+  const queryClient = useQueryClient();
   const tokenRef = useRef('');
   const [requested, setRequested] = useState<{ bank: string | null; card: string | null } | null>(null);
   const bank = useNotionDatabase('bank', requested?.bank ?? null, tokenRef);
@@ -124,9 +125,16 @@ export function useNotionData(): UseNotionData {
 
   const load = (request: NotionLoadRequest) => {
     tokenRef.current = request.token;
-    // 同じDBを要求済みならキーが変わらないので、明示的に再取得する（前回の取得は取り消される）
-    if (request.bankDatabaseId !== null && request.bankDatabaseId === requested?.bank) void bank.query.refetch();
-    if (request.cardDatabaseId !== null && request.cardDatabaseId === requested?.card) void card.query.refetch();
+    // 読み込みのたびに、対象DBのキャッシュを無効にして必ず取り直す。
+    // - 表示中のDB: 取得中のものを取り消して、すぐに再取得する
+    // - 表示していないDB（以前に読み込んで、キャッシュが残っているもの）: 古いと印を付けるので、
+    //   これから表示されるときに再取得される（staleTime: Infinity でも、古い内容のまま表示されない）
+    for (const [kind, id] of [
+      ['bank', request.bankDatabaseId],
+      ['card', request.cardDatabaseId],
+    ] as const) {
+      if (id !== null) void queryClient.invalidateQueries({ queryKey: ['notion', kind, id] });
+    }
     setRequested({ bank: request.bankDatabaseId, card: request.cardDatabaseId });
   };
 
