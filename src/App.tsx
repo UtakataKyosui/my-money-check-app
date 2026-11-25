@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import type { Filters, ParsedFile, ProvisionalPayment, TagStore } from './types';
 import { decodeCsv, parseCsvText } from './lib/parseFile';
 import {
@@ -53,6 +55,12 @@ import { TagPanel } from './components/TagPanel';
 import { TagBreakdown } from './components/TagBreakdown';
 import type { RowTagActions } from './components/TagEditor';
 import { sourceLabel } from './components/labels';
+import { DataSourceSwitch } from './components/DataSourceSwitch';
+import { NotionPanel } from './components/NotionPanel';
+import { HelpDialog, useHelpDialog } from './help';
+import { createQueryClient } from './hooks/queryClient';
+import { useDataSource } from './hooks/useDataSource';
+import { useNotionData } from './hooks/useNotionData';
 
 const DEFAULT_FILTERS: Filters = { months: [], sources: ['bank', 'card'], keyword: '' };
 const NO_TAG_IDS: string[] = [];
@@ -75,8 +83,29 @@ async function readBytes(file: File): Promise<Uint8Array> {
   });
 }
 
-export default function App() {
-  const [files, setFiles] = useState<ParsedFile[]>([]);
+interface AppProps {
+  /** テストなどで差し替える。指定しなければ、アプリ用の既定の QueryClient を使う */
+  queryClient?: QueryClient;
+}
+
+export default function App({ queryClient }: AppProps = {}) {
+  const [ownClient] = useState(createQueryClient);
+  return (
+    <QueryClientProvider client={queryClient ?? ownClient}>
+      <AppContent />
+    </QueryClientProvider>
+  );
+}
+
+function AppContent() {
+  const helpButton = useRef<HTMLButtonElement>(null);
+  const help = useHelpDialog(helpButton);
+  const [dataSource, setDataSource] = useDataSource();
+  const notion = useNotionData();
+  // CSVで読み込んだファイル。Notionに切り替えても破棄しない
+  const [csvFiles, setCsvFiles] = useState<ParsedFile[]>([]);
+  // 集計に使うデータ: CSVモードではCSVから、NotionモードではNotionから取得したもの
+  const files = dataSource === 'csv' ? csvFiles : notion.files;
   const [messages, setMessages] = useState<LoadMessage[]>([]);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [rankSource, setRankSource] = useState<RankSource>('all');
@@ -118,7 +147,7 @@ export default function App() {
     });
     if (current.length === 0) return;
 
-    const replaced = new Set(files.map((f) => f.fileName));
+    const replaced = new Set(csvFiles.map((f) => f.fileName));
     const okFiles = new Map<string, ParsedFile>();
     const newMessages: LoadMessage[] = current.map((r) => {
       const id = nextId.current++;
@@ -137,7 +166,7 @@ export default function App() {
     });
 
     if (okFiles.size > 0) {
-      setFiles((prev) => [...prev.filter((f) => !okFiles.has(f.fileName)), ...okFiles.values()]);
+      setCsvFiles((prev) => [...prev.filter((f) => !okFiles.has(f.fileName)), ...okFiles.values()]);
     }
     const touched = new Set(current.map((r) => r.fileName));
     setMessages((prev) => [...prev.filter((m) => !touched.has(m.fileName)), ...newMessages]);
@@ -154,13 +183,13 @@ export default function App() {
 
   const removeFile = (fileName: string) => {
     pending.current.delete(fileName);
-    setFiles((prev) => prev.filter((f) => f.fileName !== fileName));
+    setCsvFiles((prev) => prev.filter((f) => f.fileName !== fileName));
     setMessages((prev) => prev.filter((m) => m.fileName !== fileName));
   };
 
   const clearAll = () => {
     pending.current.clear();
-    setFiles([]);
+    setCsvFiles([]);
     setMessages([]);
     setFilters(DEFAULT_FILTERS);
     setTagFilter([]);
@@ -332,23 +361,47 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>明細チェック</h1>
+        <div className="app-title-row">
+          <h1>明細チェック</h1>
+          <button
+            ref={helpButton}
+            type="button"
+            className="btn btn-small btn-ghost"
+            aria-haspopup="dialog"
+            onClick={() => help.openHelp('csv')}
+          >
+            ヘルプ
+          </button>
+        </div>
         <p className="muted">
-          銀行の口座明細CSVとカードの利用明細CSVを読み込んで、月別・摘要別に整理します。
+          銀行の口座明細とカードの利用明細を、CSVまたはNotionのデータベースから読み込んで、月別・摘要別に整理します。
           CSVのデータはこのブラウザの中だけで処理され、送信も保存もされません。
+          Notionから取得するときは、トークンとデータベースのIDが同じサイトの中継関数を経由してNotionに送られますが、サーバーには保存されません。
           手入力した暫定支払いと、タグ・ルール・手動のタグ設定だけは、このブラウザのlocalStorageに保存されます。
         </p>
       </header>
       <main>
-        <UploadPanel
-          messages={messages}
-          files={files}
-          onFiles={handleFiles}
-          onDismissMessage={(id) => setMessages((prev) => prev.filter((m) => m.id !== id))}
-          onRemoveFile={removeFile}
-          onClear={clearAll}
-        />
-        {files.length === 0 && <EmptyState onLoadSample={loadSample} />}
+        <DataSourceSwitch value={dataSource} onChange={setDataSource} />
+        {dataSource === 'csv' ? (
+          <UploadPanel
+            messages={messages}
+            files={csvFiles}
+            onFiles={handleFiles}
+            onDismissMessage={(id) => setMessages((prev) => prev.filter((m) => m.id !== id))}
+            onRemoveFile={removeFile}
+            onClear={clearAll}
+            onOpenHelp={help.openHelp}
+          />
+        ) : (
+          <NotionPanel
+            bank={notion.bank}
+            card={notion.card}
+            requested={notion.requested}
+            onLoad={notion.load}
+            onOpenHelp={help.openHelp}
+          />
+        )}
+        {dataSource === 'csv' && csvFiles.length === 0 && <EmptyState onLoadSample={loadSample} />}
         <ProvisionalPanel
           items={provisional}
           superseded={superseded}
@@ -397,6 +450,7 @@ export default function App() {
           </>
         )}
       </main>
+      <HelpDialog open={help.open} tab={help.tab} onTabChange={help.setTab} onClose={help.closeHelp} />
     </div>
   );
 }

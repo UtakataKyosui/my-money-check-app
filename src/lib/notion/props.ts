@@ -183,14 +183,14 @@ export interface IntRead {
 
 /**
  * 金額プロパティを整数として読む。
- * error には `が負の値` / `が整数ではない` / `の値を数値として読み取れない` のいずれかが入る。
+ * error には `が負の値である` / `が整数ではない` / `の値を数値として読み取れない` のいずれかが入る。
  */
 export function readInt(prop: Obj | undefined, name: string, allowNegative: boolean): IntRead {
   const r = readNumber(prop);
   if (!r.ok) return { value: null, error: `『${name}』の値を数値として読み取れない` };
   if (r.value === null) return { value: null };
   if (!Number.isSafeInteger(r.value)) return { value: null, error: `『${name}』が整数ではない` };
-  if (!allowNegative && r.value < 0) return { value: null, error: `『${name}』が負の値` };
+  if (!allowNegative && r.value < 0) return { value: null, error: `『${name}』が負の値である` };
   return { value: r.value };
 }
 

@@ -56,7 +56,7 @@ const CARD_COLUMNS: ColumnRow[] = [
 
 function ColumnTable({ caption, rows }: { caption: string; rows: ColumnRow[] }) {
   return (
-    <div className="table-scroll">
+    <div className="table-scroll" tabIndex={0} role="region" aria-label={`${caption}（横にスクロールできます）`}>
       <table className="help-table">
         <caption className="sr-only">{caption}</caption>
         <thead>
@@ -196,7 +196,7 @@ function SpecTable({ spec }: { spec: NotionDatabaseSpec }) {
   return (
     <section aria-labelledby={headingId} className="help-spec">
       <h4 id={headingId}>{spec.title}</h4>
-      <div className="table-scroll">
+      <div className="table-scroll" tabIndex={0} role="region" aria-label={`${spec.title}のプロパティ一覧（横にスクロールできます）`}>
         <table className="help-table help-spec-table">
           <caption className="sr-only">{spec.title}のプロパティ一覧</caption>
           <thead>
