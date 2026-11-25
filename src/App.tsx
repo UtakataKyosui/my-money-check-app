@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Filters, ParsedFile } from './types';
+import type { Filters, ParsedFile, ProvisionalPayment } from './types';
 import { decodeCsv, parseCsvText } from './lib/parseFile';
 import {
   applyFilters,
@@ -10,9 +10,21 @@ import {
   summarizeByMonth,
   totals,
 } from './lib/aggregate';
+import {
+  createProvisionalId,
+  filterProvisional,
+  listAllMonths,
+  loadProvisional,
+  mergeMonthlyWithProvisional,
+  provisionalByMonth,
+  provisionalTotals,
+  saveProvisional,
+} from './lib/provisional';
 import { SAMPLE_BANK_CSV, SAMPLE_BANK_FILE_NAME, SAMPLE_CARD_CSV, SAMPLE_CARD_FILE_NAME } from './sampleData';
 import { UploadPanel } from './components/UploadPanel';
 import type { LoadMessage } from './components/UploadPanel';
+import { ProvisionalPanel } from './components/ProvisionalPanel';
+import type { ProvisionalDraft } from './components/ProvisionalPanel';
 import { EmptyState } from './components/EmptyState';
 import { SummaryCards } from './components/SummaryCards';
 import { FilterBar } from './components/FilterBar';
@@ -48,6 +60,7 @@ export default function App() {
   const [messages, setMessages] = useState<LoadMessage[]>([]);
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [rankSource, setRankSource] = useState<RankSource>('all');
+  const [provisional, setProvisional] = useState<ProvisionalPayment[]>(() => loadProvisional());
   const nextId = useRef(1);
   // ファイル名ごとの「有効な読み込み要求」。消去・削除・再入稿で無効になった要求の結果は捨てる。
   const pending = useRef(new Map<string, number>());
@@ -130,8 +143,20 @@ export default function App() {
     setFilters(DEFAULT_FILTERS);
   };
 
+  // 手入力の暫定支払いは変更のたびにlocalStorageへ保存する（CSVは保存しない）
+  const commitProvisional = (next: ProvisionalPayment[]) => {
+    setProvisional(next);
+    saveProvisional(next);
+  };
+  const addProvisional = (value: ProvisionalDraft) =>
+    commitProvisional([...provisional, { id: createProvisionalId(), ...value }]);
+  const updateProvisional = (item: ProvisionalPayment) =>
+    commitProvisional(provisional.map((p) => (p.id === item.id ? item : p)));
+  const deleteProvisional = (id: string) => commitProvisional(provisional.filter((p) => p.id !== id));
+  const deleteAllProvisional = () => commitProvisional([]);
+
   const all = useMemo(() => mergeTransactions(files), [files]);
-  const months = useMemo(() => listMonths(all), [all]);
+  const months = useMemo(() => listAllMonths(listMonths(all), provisional), [all, provisional]);
   // ファイルを削除して存在しなくなった月が選択に残らないようにする
   const effectiveFilters = useMemo<Filters>(
     () => ({ ...filters, months: filters.months.filter((m) => months.includes(m)) }),
@@ -141,7 +166,15 @@ export default function App() {
   const summary = useMemo(() => totals(filtered), [filtered]);
   const bankExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'bank')).expense, [filtered]);
   const cardExpense = useMemo(() => totals(filtered.filter((t) => t.source === 'card')).expense, [filtered]);
-  const monthly = useMemo(() => summarizeByMonth(filtered), [filtered]);
+  const filteredProvisional = useMemo(
+    () => filterProvisional(provisional, effectiveFilters),
+    [provisional, effectiveFilters],
+  );
+  const provisionalSummary = useMemo(() => provisionalTotals(filteredProvisional), [filteredProvisional]);
+  const monthly = useMemo(
+    () => mergeMonthlyWithProvisional(summarizeByMonth(filtered), provisionalByMonth(filteredProvisional)),
+    [filtered, filteredProvisional],
+  );
   const groups = useMemo(
     () => groupByDescription(filtered, { limit: 10, ...(rankSource === 'all' ? {} : { source: rankSource }) }),
     [filtered, rankSource],
@@ -163,7 +196,8 @@ export default function App() {
         <h1>明細チェック</h1>
         <p className="muted">
           銀行の口座明細CSVとカードの利用明細CSVを読み込んで、月別・摘要別に整理します。
-          データはこのブラウザの中だけで処理され、送信も保存もされません。
+          CSVのデータはこのブラウザの中だけで処理され、送信も保存もされません。
+          手入力した暫定支払いだけは、このブラウザのlocalStorageに保存されます。
         </p>
       </header>
       <main>
@@ -175,13 +209,28 @@ export default function App() {
           onRemoveFile={removeFile}
           onClear={clearAll}
         />
-        {files.length === 0 ? (
-          <EmptyState onLoadSample={loadSample} />
-        ) : (
+        {files.length === 0 && <EmptyState onLoadSample={loadSample} />}
+        <ProvisionalPanel
+          items={provisional}
+          onAdd={addProvisional}
+          onUpdate={updateProvisional}
+          onDelete={deleteProvisional}
+          onDeleteAll={deleteAllProvisional}
+        />
+        {(files.length > 0 || provisional.length > 0) && (
           <>
             <FilterBar months={months} filters={effectiveFilters} onChange={setFilters} />
-            <SummaryCards totals={summary} bankExpense={bankExpense} cardExpense={cardExpense} />
+            <SummaryCards
+              totals={summary}
+              bankExpense={bankExpense}
+              cardExpense={cardExpense}
+              provisional={provisionalSummary}
+            />
             <MonthlyTable rows={monthly} />
+          </>
+        )}
+        {files.length > 0 && (
+          <>
             <TopExpenses groups={groups} source={rankSource} onSourceChange={setRankSource} />
             {hasBank && bankIncluded && <BalanceChart points={balance} />}
             <TransactionTable transactions={filtered} />

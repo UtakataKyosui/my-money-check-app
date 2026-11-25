@@ -10,6 +10,7 @@
   --accent-text: #ffffff;
   --income: #2563eb;
   --expense: #d97706;
+  --provisional: #7c3aed;
   --pos: #15803d;
   --neg: #b91c1c;
   --warn-bg: #fff7e0;
@@ -34,6 +35,7 @@
     --accent-text: #0d1220;
     --income: #6ea0ff;
     --expense: #f0a24a;
+    --provisional: #b794f6;
     --pos: #6fd39a;
     --neg: #ff8d8d;
     --warn-bg: #2f2812;
@@ -344,6 +346,8 @@ legend,
 }
 
 input[type='search'],
+input[type='text'],
+input[type='month'],
 select {
   width: 100%;
   padding: 8px 10px;
@@ -418,6 +422,137 @@ select {
   border: 1px solid var(--warn-border);
   border-radius: 8px;
   font-size: 0.9rem;
+}
+
+.cards-title {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.cards-provisional .card {
+  border-left: 4px solid var(--provisional);
+}
+
+/* ---- 暫定支払い ---- */
+.prov-intro {
+  margin: 0 0 12px;
+}
+
+.prov-form {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.prov-form-title {
+  overflow-wrap: anywhere;
+}
+
+.prov-grid {
+  display: grid;
+  gap: 12px 16px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 720px) {
+  .prov-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .prov-wide {
+    grid-column: span 2;
+  }
+}
+
+.field-hint {
+  margin: 2px 0 0;
+}
+
+.field-error {
+  margin: 4px 0 0;
+  color: var(--neg);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+input[aria-invalid='true'] {
+  border-color: var(--neg);
+  border-width: 2px;
+}
+
+input[type='text'],
+input[type='month'] {
+  min-height: 40px;
+}
+
+.prov-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.form-status {
+  min-height: 1.4em;
+  font-size: 0.9rem;
+  color: var(--pos);
+}
+
+.form-status:empty {
+  display: none;
+}
+
+.prov-list .file-list-head {
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.prov-table .desc {
+  min-width: 8rem;
+  overflow-wrap: anywhere;
+}
+
+.prov-table tr.is-editing > * {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.prov-row-actions {
+  white-space: nowrap;
+}
+
+.cell-sub {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.num .cell-sub {
+  white-space: nowrap;
+}
+
+.badge-kind-card {
+  color: var(--expense);
+}
+
+.badge-kind-bank {
+  color: var(--income);
+}
+
+.badge-kind-other {
+  color: var(--muted);
+}
+
+.badge-confirmed {
+  color: var(--pos);
+}
+
+.badge-estimated {
+  color: var(--muted);
+  border-style: dashed;
 }
 
 /* ---- 表 ---- */
@@ -527,6 +662,11 @@ tbody tr:last-child > * {
 .swatch-expense,
 .bar-expense {
   background: var(--expense);
+}
+
+.swatch-provisional,
+.bar-provisional {
+  background: var(--provisional);
 }
 
 .mbars {

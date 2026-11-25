@@ -1,17 +1,18 @@
-import type { MonthlySummary } from '../types';
 import { formatMonth, formatYen } from '../lib/format';
+import type { MonthlyRow } from '../lib/provisional';
 
 interface Props {
-  rows: MonthlySummary[];
+  rows: MonthlyRow[];
 }
 
 /** CSSだけで描く簡易の横棒グラフ。数値は隣の表に同じものがあるため、読み上げ対象からは外す。 */
 export function MonthlyChart({ rows }: Props) {
-  const max = Math.max(1, ...rows.flatMap((r) => [r.income, r.expense]));
+  const hasProvisional = rows.some((r) => r.provisional > 0);
+  const max = Math.max(1, ...rows.flatMap((r) => [r.income, r.expense, r.provisional]));
   const pct = (n: number) => `${Math.max(0, (n / max) * 100)}%`;
 
   return (
-    <figure className="chart" aria-label="月別の収入と支出の棒グラフ">
+    <figure className="chart" aria-label="月別の収入・支出・暫定支払いの棒グラフ">
       <figcaption className="chart-legend">
         <span className="legend-item">
           <span className="swatch swatch-income" aria-hidden="true" />
@@ -21,6 +22,12 @@ export function MonthlyChart({ rows }: Props) {
           <span className="swatch swatch-expense" aria-hidden="true" />
           支出（銀行＋カード・参考値）
         </span>
+        {hasProvisional && (
+          <span className="legend-item">
+            <span className="swatch swatch-provisional" aria-hidden="true" />
+            暫定支払い（手入力）
+          </span>
+        )}
       </figcaption>
       <div className="mbars" aria-hidden="true">
         {rows.map((r) => (
@@ -35,6 +42,12 @@ export function MonthlyChart({ rows }: Props) {
                 <div className="bar bar-expense" style={{ width: pct(r.expense) }} />
                 <span className="bar-value">{formatYen(r.expense)}</span>
               </div>
+              {hasProvisional && (
+                <div className="bar-track">
+                  <div className="bar bar-provisional" style={{ width: pct(r.provisional) }} />
+                  <span className="bar-value">{formatYen(r.provisional)}</span>
+                </div>
+              )}
             </div>
           </div>
         ))}
