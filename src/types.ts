@@ -64,3 +64,31 @@ export interface Filters {
   /** 摘要の部分一致（大文字小文字・全半角を区別しない） */
   keyword: string;
 }
+
+export type ProvisionalKind = 'card' | 'bank' | 'other';
+
+/**
+ * 手入力の暫定支払い。CSVにまだ出ていない（または含まれない）支払い金額を
+ * ユーザーが入力するためのもの。CSV由来の取引とは別に管理し、混ぜて集計しない。
+ */
+export interface ProvisionalPayment {
+  id: string;
+  /** 支払い月 YYYY-MM */
+  month: string;
+  /** 支払先・内容（例: 楽天カード 11月分） */
+  label: string;
+  /** 金額（正の整数・円） */
+  amount: number;
+  kind: ProvisionalKind;
+  /** true=金額が確定済み / false=見込み */
+  confirmed: boolean;
+  note?: string;
+}
+
+export interface ProvisionalMonth {
+  month: string; // YYYY-MM
+  total: number;
+  confirmed: number;
+  estimated: number;
+  count: number;
+}
