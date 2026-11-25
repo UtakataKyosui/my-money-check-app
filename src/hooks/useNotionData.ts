@@ -24,6 +24,8 @@ export interface NotionDbStatus {
   /** 取得を要求したデータベースID。要求していなければ null */
   databaseId: string | null;
   status: 'idle' | 'loading' | 'success' | 'error';
+  /** 取得（成功または失敗）を1回以上終えたか。ボタンを「再読み込み」にするのに使う */
+  settled: boolean;
   /** 取得中に読み込んだ行数 */
   progressRows: number;
   /** 取得済みデータがあるときの値（再取得に失敗しても、前回の値が残る） */
@@ -38,8 +40,6 @@ export interface UseNotionData {
   card: NotionDbStatus;
   /** 集計に使うデータ（銀行DB・カードDBの取得結果をまとめたもの） */
   files: ParsedFile[];
-  /** 読み込みを1回でも要求したか */
-  requested: boolean;
   /** 読み込む。同じDBを要求済みなら再取得する */
   load: (request: NotionLoadRequest) => void;
 }
@@ -98,13 +98,14 @@ function useNotionDatabase(kind: Kind, databaseId: string | null, tokenRef: { cu
               : query.isSuccess
                 ? 'success'
                 : 'idle',
+      settled: query.dataUpdatedAt > 0 || query.errorUpdatedAt > 0,
       progressRows: progress,
       rowCount: data?.rowCount ?? 0,
       transactionCount: files.reduce((sum, f) => sum + f.transactions.length, 0),
       warnings: files.flatMap((f) => f.warnings),
       error: query.isError && !loading ? toDbError(query.error) : null,
     };
-  }, [kind, databaseId, query.isFetching, query.isError, query.isSuccess, query.error, data, progress]);
+  }, [kind, databaseId, query.isFetching, query.isError, query.isSuccess, query.error, query.dataUpdatedAt, query.errorUpdatedAt, data, progress]);
 
   return { query, status, files: databaseId === null ? NO_FILES : (data?.files ?? NO_FILES) };
 }
@@ -129,5 +130,5 @@ export function useNotionData(): UseNotionData {
     setRequested({ bank: request.bankDatabaseId, card: request.cardDatabaseId });
   };
 
-  return { bank: bank.status, card: card.status, files, requested: requested !== null, load };
+  return { bank: bank.status, card: card.status, files, load };
 }

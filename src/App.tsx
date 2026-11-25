@@ -396,7 +396,6 @@ function AppContent() {
           <NotionPanel
             bank={notion.bank}
             card={notion.card}
-            requested={notion.requested}
             onLoad={notion.load}
             onOpenHelp={help.openHelp}
           />

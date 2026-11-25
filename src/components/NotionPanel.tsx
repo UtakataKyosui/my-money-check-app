@@ -15,8 +15,6 @@ import { formatCount } from './labels';
 interface Props {
   bank: NotionDbStatus;
   card: NotionDbStatus;
-  /** 読み込みを1回でも要求したか（ボタンの表示が「再読み込み」になる） */
-  requested: boolean;
   onLoad: (request: NotionLoadRequest) => void;
   onOpenHelp: (tab: HelpTabId) => void;
 }
@@ -91,7 +89,7 @@ function StatusItem({ status }: { status: NotionDbStatus }) {
   return null;
 }
 
-export function NotionPanel({ bank, card, requested, onLoad, onOpenHelp }: Props) {
+export function NotionPanel({ bank, card, onLoad, onOpenHelp }: Props) {
   const uid = useId();
   const [initial] = useState(loadNotionConfig);
   const [token, setToken] = useState(loadNotionToken);
@@ -320,7 +318,7 @@ export function NotionPanel({ bank, card, requested, onLoad, onOpenHelp }: Props
 
         <div className="prov-actions">
           <button type="submit" className="btn" disabled={busy}>
-            {requested ? '再読み込み' : 'Notionから読み込む'}
+            {bank.settled || card.settled ? '再読み込み' : 'Notionから読み込む'}
           </button>
         </div>
         <p className="form-status" aria-live="polite">
