@@ -105,8 +105,25 @@ describe('キー', () => {
     fileName: 'a.csv',
   };
 
-  it('transactionKey は source|date|description|expense|income', () => {
-    expect(transactionKey(tx)).toBe('bank|2026-11-05|ｱﾏｿﾞﾝ|1200|0');
+  it('transactionKey は `tx:` つきのハッシュで、日付・摘要・金額を読める形で含まない', () => {
+    const key = transactionKey(tx);
+    expect(key).toMatch(/^tx:[0-9a-z]+$/);
+    expect(key).not.toContain('2026');
+    expect(key).not.toContain('ｱﾏｿﾞﾝ');
+    expect(key).not.toContain('1200');
+  });
+
+  it('transactionKey は同じ入力なら常に同じ値になる（保存したキーが再読み込み後も一致する）', () => {
+    expect(transactionKey(tx)).toBe(transactionKey({ ...tx }));
+    expect(transactionKey(tx)).toBe('tx:' + transactionKey(tx).slice(3));
+  });
+
+  it('多数の異なる明細でキーが衝突しない', () => {
+    const keys = new Set<string>();
+    for (let amount = 0; amount < 5000; amount++) {
+      keys.add(transactionKey({ ...tx, expense: amount, description: `店${amount % 37}` }));
+    }
+    expect(keys.size).toBe(5000);
   });
 
   it('同一の行は ID やファイル名が違っても同じキーになる', () => {
@@ -118,6 +135,19 @@ describe('キー', () => {
   it('金額や日付が違えば別のキーになる', () => {
     expect(transactionKey({ ...tx, expense: 1201 })).not.toBe(transactionKey(tx));
     expect(transactionKey({ ...tx, source: 'card' })).not.toBe(transactionKey(tx));
+  });
+
+  it('手動の上書きを保存しても、localStorageの文字列に日付・摘要・金額が含まれない', () => {
+    let raw = '';
+    let store = emptyTagStore();
+    const added = addTag(store, '家賃');
+    if (!added.ok) throw new Error('addTag failed');
+    store = setOverride(added.store, transactionKey(tx), [added.tag.id]);
+    saveTagStore(store, { setItem: (_k, v) => void (raw = v) });
+    expect(raw).toContain(transactionKey(tx));
+    expect(raw).not.toContain('ｱﾏｿﾞﾝ');
+    expect(raw).not.toContain('2026-11-05');
+    expect(raw).not.toContain('1200');
   });
 
   it('provisionalKey は prov:<id>', () => {

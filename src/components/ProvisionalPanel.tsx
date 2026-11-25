@@ -1,9 +1,13 @@
-import { useId, useRef, useState } from 'react';
+import { Fragment, useId, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { ProvisionalKind, ProvisionalPayment, SupersededProvisional } from '../types';
+import type { ProvisionalKind, ProvisionalPayment, SupersededProvisional, Tag } from '../types';
 import { validateProvisionalInput } from '../lib/provisional';
+import { provisionalKey } from '../lib/tags';
 import { formatMonth, formatSignedYen, formatYen } from '../lib/format';
 import { formatCount, provisionalKindLabel } from './labels';
+import { TagChips } from './TagChips';
+import { TagEditor } from './TagEditor';
+import type { RowTagActions } from './TagEditor';
 
 export type ProvisionalDraft = Omit<ProvisionalPayment, 'id'>;
 
@@ -16,7 +20,12 @@ interface Props {
   onUpdate: (item: ProvisionalPayment) => void;
   onDelete: (id: string) => void;
   onDeleteAll: () => void;
+  /** 暫定支払いのID → 付いているタグID（呼び出し側で useMemo により事前計算する） */
+  tagIds: ReadonlyMap<string, string[]>;
+  tagging: RowTagActions;
 }
+
+const NO_TAGS: string[] = [];
 
 interface FormState {
   month: string;
@@ -44,12 +53,23 @@ function emptyForm(): FormState {
   return { month: currentMonth(), label: '', amount: '', kind: 'card', confirmed: true, note: '', pinned: false };
 }
 
-export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDelete, onDeleteAll }: Props) {
+export function ProvisionalPanel({
+  items,
+  superseded = [],
+  onAdd,
+  onUpdate,
+  onDelete,
+  onDeleteAll,
+  tagIds,
+  tagging,
+}: Props) {
   const uid = useId();
   const [form, setForm] = useState<FormState>(emptyForm);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [status, setStatus] = useState('');
+  // タグ編集中の行（暫定支払いID）
+  const [tagEditingId, setTagEditingId] = useState<string | null>(null);
   const inputs = {
     month: useRef<HTMLInputElement>(null),
     label: useRef<HTMLInputElement>(null),
@@ -60,6 +80,19 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
   const supersededById = new Map(superseded.map((s) => [s.item.id, s]));
   const supersededCount = items.filter((i) => supersededById.has(i.id)).length;
   const sorted = [...items].sort((a, b) => a.month.localeCompare(b.month));
+
+  const tagsById = useMemo(() => new Map(tagging.tags.map((t) => [t.id, t])), [tagging.tags]);
+  const tagsOf = (id: string): Tag[] =>
+    (tagIds.get(id) ?? NO_TAGS).flatMap((tagId) => {
+      const tag = tagsById.get(tagId);
+      return tag ? [tag] : [];
+    });
+  const tagButtonId = (id: string) => `${uid}-tag-btn-${id}`;
+  const tagEditorId = (id: string) => `${uid}-tag-editor-${id}`;
+  const closeTagEditor = (id: string) => {
+    setTagEditingId(null);
+    requestAnimationFrame(() => document.getElementById(tagButtonId(id))?.focus());
+  };
 
   const ids = {
     month: `${uid}-month`,
@@ -137,6 +170,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
 
   const handleDelete = (item: ProvisionalPayment) => {
     if (editingId === item.id) resetForm();
+    if (tagEditingId === item.id) setTagEditingId(null);
     onDelete(item.id);
     setStatus(`「${item.label}」を削除しました。`);
   };
@@ -144,6 +178,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
   const handleDeleteAll = () => {
     if (!window.confirm('登録済みの暫定支払いをすべて削除します。元に戻せません。よろしいですか？')) return;
     resetForm();
+    setTagEditingId(null);
     onDeleteAll();
     setStatus('暫定支払いをすべて削除しました。');
   };
@@ -325,7 +360,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
         ) : (
           <>
             <p className="muted small">
-              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード）が反映されます。この一覧には登録済みのものをすべて表示します（CSVで置き換え済みのカードは暫定値ではなくCSVの支払額を、銀行は何も集計しません）。
+              概要・月別サマリーの暫定支払いには、絞り込み条件（月・キーワード・タグ）が反映されます。この一覧には登録済みのものをすべて表示します（CSVで置き換え済みのカードは暫定値ではなくCSVの支払額を、銀行は何も集計しません）。
             </p>
             <div className="table-scroll" tabIndex={0} role="region" aria-label="暫定支払いの表">
               <table className="num-table prov-table">
@@ -333,6 +368,7 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                   <tr>
                     <th scope="col">月</th>
                     <th scope="col">支払先・内容</th>
+                    <th scope="col">タグ</th>
                     <th scope="col">種別</th>
                     <th scope="col" className="num">金額</th>
                     <th scope="col">状態</th>
@@ -344,15 +380,30 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                     const sup = supersededById.get(item.id);
                     const by = sup?.by;
                     const replacement = sup?.replacement;
-                    const rowClass = [item.id === editingId ? 'is-editing' : '', by !== undefined ? 'is-superseded' : '']
+                    const rowClass = [item.id === editingId || item.id === tagEditingId ? 'is-editing' : '', by !== undefined ? 'is-superseded' : '']
                       .filter(Boolean)
                       .join(' ');
                     return (
-                    <tr key={item.id} className={rowClass || undefined}>
+                    <Fragment key={item.id}>
+                    <tr className={rowClass || undefined}>
                       <th scope="row" className="nowrap">{formatMonth(item.month)}</th>
                       <td className="desc">
                         {item.label}
                         {item.note && <span className="cell-sub muted">{item.note}</span>}
+                      </td>
+                      <td className="tag-cell">
+                        <TagChips tags={tagsOf(item.id)} />
+                        <button
+                          type="button"
+                          id={tagButtonId(item.id)}
+                          className="btn btn-small btn-ghost tag-edit-btn"
+                          aria-label={`${item.label}のタグを編集`}
+                          aria-expanded={tagEditingId === item.id}
+                          aria-controls={tagEditingId === item.id ? tagEditorId(item.id) : undefined}
+                          onClick={() => (tagEditingId === item.id ? closeTagEditor(item.id) : setTagEditingId(item.id))}
+                        >
+                          タグを編集
+                        </button>
                       </td>
                       <td>
                         <span className={`badge badge-kind-${item.kind}`}>{provisionalKindLabel(item.kind)}</span>
@@ -413,6 +464,22 @@ export function ProvisionalPanel({ items, superseded = [], onAdd, onUpdate, onDe
                         </button>
                       </td>
                     </tr>
+                    {tagEditingId === item.id && (
+                      <tr className="tag-editor-row">
+                        <td colSpan={7}>
+                          <TagEditor
+                            id={tagEditorId(item.id)}
+                            title={item.label}
+                            actions={tagging}
+                            itemKey={provisionalKey(item)}
+                            currentIds={tagIds.get(item.id) ?? NO_TAGS}
+                            ruleKeyword={item.label}
+                            onClose={() => closeTagEditor(item.id)}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                     );
                   })}
                 </tbody>

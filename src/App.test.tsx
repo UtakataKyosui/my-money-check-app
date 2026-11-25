@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { PROVISIONAL_STORAGE_KEY } from './lib/provisional';
+import { TAGS_STORAGE_KEY } from './lib/tags';
 import { SAMPLE_BANK_CSV } from './sampleData';
 
 const BAD_CSV = '不明,見出し\r\n1,2\r\n';
@@ -806,3 +807,486 @@ describe('暫定支払いの支出合計・収支への反映', () => {
     expect(text('summary-provisional-expense')).toBe('0円');
   });
 });
+
+describe('タグ付け', () => {
+  /** 「タグを作る」フォームでタグを追加する */
+  async function addTagByForm(user: User, name: string) {
+    await user.type(screen.getByLabelText('タグ名'), name);
+    await user.click(screen.getByRole('button', { name: 'タグを追加' }));
+  }
+
+  /** 「自動タグ付けのルール」フォームでルールを追加する */
+  async function addRuleByForm(user: User, keyword: string, tagName: string) {
+    await user.type(screen.getByLabelText('摘要に含む文字列'), keyword);
+    await user.selectOptions(screen.getByLabelText('付けるタグ'), tagName);
+    await user.click(screen.getByRole('button', { name: 'ルールを追加' }));
+  }
+
+  /** 明細の表のうち、摘要が一致する行（日付などの絞り込みに使う文字列を含むもの） */
+  function txRows(description: string, containing = ''): HTMLElement[] {
+    const table = screen.getByRole('table', { name: /明細一覧/ });
+    return within(table)
+      .getAllByRole('row')
+      .filter((row) => {
+        const cells = within(row).queryAllByRole('cell');
+        return cells[2]?.textContent === description && (row.textContent ?? '').includes(containing);
+      });
+  }
+
+  /** 明細の行の「タグ」列の文字列（チップの名前、またはタグなし） */
+  function tagCellText(description: string, containing = ''): string {
+    const [row] = txRows(description, containing);
+    if (!row) throw new Error(`行が見つかりません: ${description}`);
+    return within(row).getAllByRole('cell')[3]?.textContent ?? '';
+  }
+
+  const rowTagButton = (description: string) =>
+    screen.getByRole('button', { name: `${description}のタグを編集` });
+  const breakdown = () => screen.getByTestId('tag-breakdown');
+  const breakdownRow = (name: RegExp | string) => within(breakdown()).getByRole('button', { name });
+
+  it('CSVが無くても「タグとルール」が表示され、保存範囲の説明とおすすめタグの案内が出る', () => {
+    render(<App />);
+    expect(screen.getByRole('heading', { name: 'タグとルール' })).toBeInTheDocument();
+    expect(
+      screen.getByText(/タグ・ルール・手動の設定だけがこのブラウザのlocalStorageに保存され、CSVの明細（日付・摘要・金額など）そのものは保存されません/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'まずはタグを作りましょう' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'おすすめのタグを追加' })).toBeInTheDocument();
+    expect(screen.getByText('まだルールはありません。')).toBeInTheDocument();
+    // タグが無い間は、ルールを作れない旨を出す
+    expect(screen.getByText(/先にタグを作成してください/)).toBeInTheDocument();
+  });
+
+  it('タグを作成できる（CSVなしでも）。色の変更・名前の変更・一覧の件数も反映される', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addTagByForm(user, '家賃');
+
+    expect(screen.getByRole('heading', { name: 'タグ一覧（1件）' })).toBeInTheDocument();
+    const list = screen.getAllByRole('list').find((l) => l.className.includes('tag-list'));
+    expect(list).toHaveTextContent('家賃');
+    expect(list).toHaveTextContent('0件');
+    expect(screen.queryByRole('heading', { name: 'まずはタグを作りましょう' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('タグ名')).toHaveValue('');
+
+    await user.selectOptions(screen.getByLabelText('「家賃」の色'), 'オレンジ');
+    expect(JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) ?? 'null').tags[0]).toMatchObject({ name: '家賃', color: 'orange' });
+
+    await user.click(screen.getByRole('button', { name: '「家賃」の名前を変更' }));
+    const input = screen.getByLabelText('「家賃」の新しい名前');
+    await user.clear(input);
+    await user.type(input, '住居費');
+    await user.click(screen.getByRole('button', { name: '名前を保存' }));
+    expect(screen.getByRole('button', { name: '「住居費」を削除' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '「家賃」を削除' })).not.toBeInTheDocument();
+  });
+
+  it('空の名前と重複した名前はエラーを表示する（aria-invalid / aria-describedby）', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'タグを追加' }));
+    const input = screen.getByLabelText('タグ名');
+    expect(screen.getByText('タグ名を入力してください。')).toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input.getAttribute('aria-describedby')).toContain(screen.getByText('タグ名を入力してください。').id);
+    expect(input).toHaveFocus();
+
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, '家賃');
+    expect(screen.getByText('同じ名前のタグがすでにあります。')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'タグ一覧（1件）' })).toBeInTheDocument();
+
+    // 入力し直すとエラーは消える
+    await user.type(screen.getByLabelText('タグ名'), 'x');
+    expect(screen.queryByText('同じ名前のタグがすでにあります。')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('タグ名')).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('名前の変更で重複・空はエラーになる。ルールの空のキーワードもエラーになる', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, '食費');
+
+    await user.click(screen.getByRole('button', { name: '「食費」の名前を変更' }));
+    const input = screen.getByLabelText('「食費」の新しい名前');
+    await user.clear(input);
+    await user.type(input, '家賃');
+    await user.click(screen.getByRole('button', { name: '名前を保存' }));
+    expect(screen.getByText('同じ名前のタグがすでにあります。')).toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    await user.click(screen.getByRole('button', { name: 'キャンセル' }));
+
+    await user.click(screen.getByRole('button', { name: 'ルールを追加' }));
+    expect(screen.getByText('キーワードを入力してください。')).toBeInTheDocument();
+    expect(screen.getByLabelText('摘要に含む文字列')).toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('おすすめのタグをまとめて追加できる（2回目は追加済みと案内）', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'おすすめのタグを追加' }));
+    expect(screen.getByRole('heading', { name: 'タグ一覧（9件）' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '「サブスク」を削除' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'おすすめのタグを追加' }));
+    expect(screen.getByText('おすすめのタグはすべて追加済みです。')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'タグ一覧（9件）' })).toBeInTheDocument();
+  });
+
+  it('ルールを追加すると、該当件数のプレビューが出て、サンプルの該当する明細に自動でタグが付く', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+
+    await user.type(screen.getByLabelText('摘要に含む文字列'), '家賃');
+    expect(screen.getByText(/現在読み込んでいる明細（CSVの取引と暫定支払い 20件）のうち、2件が該当します/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'ルールを追加' }));
+
+    expect(screen.getByText('摘要に「家賃」を含む →')).toBeInTheDocument();
+    expect(txRows('振込 家賃')).toHaveLength(2);
+    for (const row of txRows('振込 家賃')) expect(within(row).getAllByRole('cell')[3]).toHaveTextContent('家賃');
+    expect(tagCellText('給与', '2026/10/05')).toBe('タグなしタグを編集');
+    // タグ一覧の件数は、読み込み中の明細にタグが付いている件数
+    expect(screen.getAllByRole('list').find((l) => l.className.includes('tag-list'))).toHaveTextContent('2件');
+    // 同じキーワードの重複ルールはエラー
+    await user.type(screen.getByLabelText('摘要に含む文字列'), '家賃');
+    await user.click(screen.getByRole('button', { name: 'ルールを追加' }));
+    expect(screen.getByText('同じキーワードのルールがすでにあります。')).toBeInTheDocument();
+  });
+
+  it('明細ごとに手動でタグを付け外しでき、「ルールに戻す」でルールの結果に戻る', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, 'サブスク');
+    await addRuleByForm(user, '家賃', '家賃');
+
+    // 手動で付ける: ルールに当たらない明細にタグを付ける
+    expect(tagCellText('動画配信サービス')).not.toContain('サブスク');
+    await user.click(rowTagButton('動画配信サービス'));
+    const editor = screen.getByRole('group', { name: '「動画配信サービス」のタグを編集' });
+    expect(within(editor).getByRole('button', { name: 'ルールに戻す' })).toBeDisabled();
+    await user.click(within(editor).getByRole('checkbox', { name: 'サブスク' }));
+    await user.click(within(editor).getByRole('button', { name: 'タグを保存' }));
+    expect(screen.queryByRole('group', { name: /のタグを編集/ })).not.toBeInTheDocument();
+    expect(tagCellText('動画配信サービス')).toContain('サブスク');
+
+    // 手動で外す: ルールで付いたタグを、1件だけ外す（もう1件は付いたまま）
+    await user.click(screen.getAllByRole('button', { name: '振込 家賃のタグを編集' })[0]!);
+    const rentEditor = screen.getByRole('group', { name: '「振込 家賃」のタグを編集' });
+    expect(within(rentEditor).getByRole('checkbox', { name: '家賃' })).toBeChecked();
+    await user.click(within(rentEditor).getByRole('checkbox', { name: '家賃' }));
+    await user.click(within(rentEditor).getByRole('button', { name: 'タグを保存' }));
+    // 同じ日付・摘要・金額の明細には同じ設定が適用される。日付が違う2件のうち、先頭（11/01）だけが外れる
+    expect(tagCellText('振込 家賃', '2026/11/01')).not.toContain('家賃');
+    expect(tagCellText('振込 家賃', '2026/10/01')).toContain('家賃');
+
+    // ルールに戻す
+    await user.click(screen.getAllByRole('button', { name: '振込 家賃のタグを編集' })[0]!);
+    await user.click(screen.getByRole('button', { name: 'ルールに戻す' }));
+    expect(tagCellText('振込 家賃', '2026/11/01')).toContain('家賃');
+    expect(JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) ?? 'null').overrides).not.toHaveProperty(
+      'bank|2026-11-01|振込 家賃|85000|0',
+    );
+  });
+
+  it('編集UIはキーボードで開閉でき、開いている行が分かる', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '食費');
+
+    const button = rowTagButton('電気料金');
+    button.focus();
+    await user.keyboard('{Enter}');
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(button).toHaveAttribute('aria-controls');
+    expect(button.closest('tr')).toHaveClass('is-editing');
+    // 開いたら編集UIの先頭の入力にフォーカスが移る
+    const editor = screen.getByRole('group', { name: '「電気料金」のタグを編集' });
+    expect(within(editor).getByRole('checkbox', { name: '食費' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(button.closest('tr')).not.toHaveClass('is-editing');
+    await vi.waitFor(() => expect(button).toHaveFocus());
+  });
+
+  it('「この摘要をルールにする」で、その行の摘要をキーワードにしたルールが追加される', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '光熱費');
+
+    await user.click(rowTagButton('電気料金'));
+    const editor = screen.getByRole('group', { name: '「電気料金」のタグを編集' });
+    const ruleButton = within(editor).getByRole('button', { name: 'この摘要をルールにする' });
+    expect(ruleButton).toBeDisabled(); // タグを1つ選ぶまでは使えない
+    await user.click(within(editor).getByRole('checkbox', { name: '光熱費' }));
+    await user.click(ruleButton);
+
+    expect(within(editor).getByText(/ルールを追加しました（摘要に「電気料金」を含む明細に「光熱費」）/)).toBeInTheDocument();
+    expect(screen.getByText('摘要に「電気料金」を含む →')).toBeInTheDocument();
+    // 手動の設定は保存していないが、ルールで自動的にタグが付く
+    expect(tagCellText('電気料金')).toContain('光熱費');
+
+    // もう一度押すと重複エラー
+    await user.click(ruleButton);
+    expect(within(editor).getByText('同じキーワードのルールがすでにあります。')).toBeInTheDocument();
+  });
+
+  it('暫定支払いにもタグのチップと編集UIがあり、ルールと手動で付けられる', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addTagByForm(user, '保険');
+    await addTagByForm(user, 'サブスク');
+    await addRuleByForm(user, '保険', '保険');
+
+    await addProvisional(user, { month: '2026-12', label: '自動車保険', amount: '30000', kind: 'その他' });
+    await addProvisional(user, { month: '2026-12', label: '動画サービス年額', amount: '12000', kind: 'その他' });
+    const insurance = within(provisionalTable()).getByRole('row', { name: /自動車保険/ });
+    expect(within(insurance).getAllByRole('cell')[1]).toHaveTextContent('保険');
+    const video = within(provisionalTable()).getByRole('row', { name: /動画サービス年額/ });
+    expect(within(video).getAllByRole('cell')[1]).toHaveTextContent('タグなし');
+
+    await user.click(screen.getByRole('button', { name: '動画サービス年額のタグを編集' }));
+    const editor = screen.getByRole('group', { name: '「動画サービス年額」のタグを編集' });
+    await user.click(within(editor).getByRole('checkbox', { name: 'サブスク' }));
+    await user.click(within(editor).getByRole('button', { name: 'タグを保存' }));
+    expect(within(provisionalTable()).getByRole('row', { name: /動画サービス年額/ })).toHaveTextContent('サブスク');
+
+    // 保存されたキーは prov:<id>
+    const overrides = JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) ?? 'null').overrides as Record<string, string[]>;
+    expect(Object.keys(overrides)).toHaveLength(1);
+    expect(Object.keys(overrides)[0]).toMatch(/^prov:/);
+  });
+
+  it('タグで絞り込める（複数選択・タグなし）。概要・明細の件数が変わり、リセットで戻る', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, '食費');
+    await addRuleByForm(user, '家賃', '家賃');
+    await addRuleByForm(user, 'スーパー', '食費');
+
+    const filter = screen.getByRole('group', { name: /^タグ（未選択なら全て/ });
+    await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+    expect(screen.getByTestId('summary-count')).toHaveTextContent('2件');
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全2件中 2件を表示');
+    expect(screen.getByTestId('summary-bank-expense')).toHaveTextContent('170,000円');
+    expect(screen.getByTestId('summary-card-expense')).toHaveTextContent('0円');
+
+    // 複数選ぶと、どれかが付いた明細
+    await user.click(within(filter).getByRole('checkbox', { name: '食費' }));
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全5件中 5件を表示');
+
+    // タグなし
+    await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+    await user.click(within(filter).getByRole('checkbox', { name: '食費' }));
+    await user.click(within(filter).getByRole('checkbox', { name: 'タグなし' }));
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全15件中 15件を表示');
+    expect(screen.getByTestId('summary-count')).toHaveTextContent('15件');
+
+    await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全17件中 17件を表示');
+
+    // 条件をリセットでタグの選択も外れる
+    await user.click(screen.getByRole('button', { name: '条件をリセット' }));
+    expect(within(filter).getByRole('checkbox', { name: 'タグなし' })).not.toBeChecked();
+    expect(within(filter).getByRole('checkbox', { name: '家賃' })).not.toBeChecked();
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全20件中 20件を表示');
+  });
+
+  it('タグの絞り込みは暫定支払いにも適用され、残高推移にも反映される', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+    await addRuleByForm(user, '家賃', '家賃');
+    await addProvisional(user, { month: '2027-01', label: '来年の家賃の前払い', amount: '85000', kind: 'その他' });
+    await addProvisional(user, { month: '2027-01', label: '固定資産税', amount: '60000', kind: 'その他' });
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('145,000円');
+
+    const filter = screen.getByRole('group', { name: /^タグ（未選択なら全て/ });
+    await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('85,000円');
+    expect(screen.getByTestId('summary-count')).toHaveTextContent('2件');
+    // 銀行の残高推移も、絞り込み後の取引だけになる（家賃の2件。最後は 11/01 の 338,590円）
+    expect(screen.getByRole('img', { name: /銀行の残高推移/ })).toHaveAccessibleName(/2026\/11\/01は338,590円。$/);
+
+    await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+    await user.click(within(filter).getByRole('checkbox', { name: 'タグなし' }));
+    expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('60,000円');
+  });
+
+  it('タグ別の支出: タグごとの金額・件数・割合・「タグなし」を表示し、CSVで上書きされた暫定支払いは含めない', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, '食費');
+    await addTagByForm(user, 'カード請求');
+    await addRuleByForm(user, '家賃', '家賃');
+    await addRuleByForm(user, 'スーパー', '食費');
+    await addRuleByForm(user, 'ワイジェイ', 'カード請求');
+    // 11月分はサンプルのカードCSV（66,510円）で上書きされる。12月分は暫定のまま集計される
+    await addProvisional(user, { month: '2026-11', label: 'ワイジェイカード 11月分', amount: '48500' });
+    await addProvisional(user, { month: '2026-12', label: 'ワイジェイカード 12月分', amount: '1000' });
+    await addProvisional(user, { month: '2026-12', label: '来月の家賃', amount: '50000', kind: 'その他' });
+
+    // 支出合計 = CSV 395,750円 + 暫定の 12月分 1,000円 + 50,000円（上書き分は加算しない）
+    expect(screen.getByTestId('summary-expense')).toHaveTextContent('446,750円');
+
+    expect(breakdownRow(/^家賃/)).toHaveTextContent('220,000円（3件・49.2%）');
+    expect(breakdownRow(/^食費/)).toHaveTextContent('23,010円（3件・5.2%）');
+    expect(breakdownRow(/^カード請求/)).toHaveTextContent('1,000円（1件・0.2%）');
+    // 残り: 446,750 - 220,000 - 23,010 - 1,000 = 202,740円、18件 - 5件 = 13件
+    expect(breakdownRow(/^タグなし/)).toHaveTextContent('202,740円（13件・45.4%）');
+    expect(screen.getByText(/複数のタグが付いた明細は各タグに全額を計上するため、タグ別の合計が支出合計を超えることがあります/)).toBeInTheDocument();
+    // 合計の大きい順（家賃 > 食費 > カード請求）、タグなしは最後
+    expect(within(breakdown()).getAllByRole('button').map((b) => b.textContent?.slice(0, 4))).toEqual([
+      '家賃22',
+      '食費23',
+      'カード請',
+      'タグなし',
+    ]);
+  });
+
+  it('複数のタグが付いた明細は各タグに全額を計上する', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '固定費');
+    await addTagByForm(user, '家賃');
+    await addRuleByForm(user, '家賃', '家賃');
+    await addRuleByForm(user, '家賃', '固定費');
+
+    expect(breakdownRow(/^家賃/)).toHaveTextContent('170,000円（2件');
+    expect(breakdownRow(/^固定費/)).toHaveTextContent('170,000円（2件');
+    expect(tagCellText('振込 家賃', '2026/11/01')).toContain('家賃');
+    expect(tagCellText('振込 家賃', '2026/11/01')).toContain('固定費');
+  });
+
+  it('タグ別の支出の行を押すと、そのタグで絞り込み、もう一度押すと解除する', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '食費');
+    await addRuleByForm(user, 'スーパー', '食費');
+
+    await user.click(breakdownRow(/^食費/));
+    expect(breakdownRow(/^食費/)).toHaveAttribute('aria-pressed', 'true');
+    const filter = screen.getByRole('group', { name: /^タグ（未選択なら全て/ });
+    expect(within(filter).getByRole('checkbox', { name: '食費' })).toBeChecked();
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全3件中 3件を表示');
+    // 絞り込み後の概要・集計に反映される
+    expect(screen.getByTestId('summary-card-expense')).toHaveTextContent('23,010円');
+
+    await user.click(breakdownRow(/^食費/));
+    expect(within(filter).getByRole('checkbox', { name: '食費' })).not.toBeChecked();
+    expect(screen.getByTestId('tx-count')).toHaveTextContent('全20件中 20件を表示');
+  });
+
+  it('タグがまだ無いときは、タグ別の支出に作成の案内を出す', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    expect(screen.getByRole('heading', { name: 'タグ別の支出' })).toBeInTheDocument();
+    expect(screen.getByText(/タグがまだありません。「タグとルール」でタグを作ると/)).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /^タグ（未選択なら全て/ })).not.toBeInTheDocument();
+  });
+
+  describe('タグの削除', () => {
+    it('確認でキャンセルすると削除されない', async () => {
+      const user = userEvent.setup();
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      render(<App />);
+      await addTagByForm(user, '家賃');
+      await user.click(screen.getByRole('button', { name: '「家賃」を削除' }));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: '「家賃」を削除' })).toBeInTheDocument();
+    });
+
+    it('削除すると、ルール・手動の設定・絞り込みの選択からも外れる', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      render(<App />);
+      await loadSample(user);
+      await addTagByForm(user, '家賃');
+      await addTagByForm(user, '食費');
+      await addRuleByForm(user, '家賃', '家賃');
+      // 手動で食費も付ける
+      await user.click(rowTagButton('電気料金'));
+      const editor = screen.getByRole('group', { name: '「電気料金」のタグを編集' });
+      await user.click(within(editor).getByRole('checkbox', { name: '食費' }));
+      await user.click(within(editor).getByRole('button', { name: 'タグを保存' }));
+      expect(tagCellText('電気料金')).toContain('食費');
+      // 家賃で絞り込み中
+      const filter = screen.getByRole('group', { name: /^タグ（未選択なら全て/ });
+      await user.click(within(filter).getByRole('checkbox', { name: '家賃' }));
+      expect(screen.getByTestId('tx-count')).toHaveTextContent('全2件中 2件を表示');
+
+      await user.click(screen.getByRole('button', { name: '「家賃」を削除' }));
+      // ルールが消える
+      expect(screen.getByText('まだルールはありません。')).toBeInTheDocument();
+      // 選択中のタグが削除されたので、絞り込みも外れて全件に戻る
+      expect(screen.getByTestId('tx-count')).toHaveTextContent('全20件中 20件を表示');
+      expect(within(filter).queryByRole('checkbox', { name: '家賃' })).not.toBeInTheDocument();
+      expect(within(filter).getByRole('checkbox', { name: 'タグなし' })).not.toBeChecked();
+      expect(tagCellText('振込 家賃', '2026/11/01')).not.toContain('家賃');
+      // 手動で付けた食費は残る
+      expect(tagCellText('電気料金')).toContain('食費');
+      const saved = JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) ?? 'null');
+      expect(saved.tags.map((t: { name: string }) => t.name)).toEqual(['食費']);
+      expect(saved.rules).toEqual([]);
+    });
+  });
+
+  it('localStorageに保存され、再マウントで復元される（CSVは復元されない）', async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await loadSample(user);
+    await addTagByForm(user, '家賃');
+    await addTagByForm(user, 'サブスク');
+    await addRuleByForm(user, '家賃', '家賃');
+    await user.click(rowTagButton('動画配信サービス'));
+    const editor = screen.getByRole('group', { name: '「動画配信サービス」のタグを編集' });
+    await user.click(within(editor).getByRole('checkbox', { name: 'サブスク' }));
+    await user.click(within(editor).getByRole('button', { name: 'タグを保存' }));
+
+    const saved = JSON.parse(localStorage.getItem(TAGS_STORAGE_KEY) ?? 'null');
+    expect(saved.tags.map((t: { name: string }) => t.name)).toEqual(['家賃', 'サブスク']);
+    expect(saved.rules).toHaveLength(1);
+    expect(saved.rules[0]).toMatchObject({ keyword: '家賃' });
+    expect(Object.keys(saved.overrides)).toHaveLength(1);
+    const dump = JSON.stringify(Object.entries(localStorage));
+    expect(dump).not.toContain('sample-bank.csv');
+    expect(dump).not.toContain('sample-card.csv');
+
+    first.unmount();
+    render(<App />);
+    expect(screen.getByRole('heading', { name: 'タグ一覧（2件）' })).toBeInTheDocument();
+    expect(screen.getByText('摘要に「家賃」を含む →')).toBeInTheDocument();
+    // CSVは復元されない
+    expect(screen.getByRole('heading', { name: 'まずはCSVを読み込みましょう' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '明細' })).not.toBeInTheDocument();
+
+    // 同じCSVを読み込み直すと、保存されたルールと手動の設定で同じタグが付く
+    await loadSample(user);
+    expect(tagCellText('振込 家賃', '2026/10/01')).toContain('家賃');
+    expect(tagCellText('動画配信サービス')).toContain('サブスク');
+  });
+
+  it('壊れた保存データでも空の状態で起動する', () => {
+    localStorage.setItem(TAGS_STORAGE_KEY, '{broken');
+    render(<App />);
+    expect(screen.getByRole('heading', { name: 'まずはタグを作りましょう' })).toBeInTheDocument();
+  });
+});
+

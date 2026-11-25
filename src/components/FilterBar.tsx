@@ -1,20 +1,33 @@
 import { useId } from 'react';
-import type { Filters, SourceKind } from '../types';
+import type { Filters, SourceKind, Tag } from '../types';
 import { formatMonth } from '../lib/format';
+import { UNTAGGED } from '../lib/tags';
 import { sourceLabel } from './labels';
+import { TagChip } from './TagChips';
 
 interface Props {
   months: string[];
   filters: Filters;
   onChange: (next: Filters) => void;
+  /** 絞り込みに使えるタグ（空ならタグの絞り込みは出さない） */
+  tags: Tag[];
+  /** 選択中のタグID。`UNTAGGED` は「タグなし」 */
+  tagFilter: string[];
+  onTagFilterChange: (next: string[]) => void;
 }
 
 const SOURCES: SourceKind[] = ['bank', 'card'];
 
-export function FilterBar({ months, filters, onChange }: Props) {
+export function FilterBar({ months, filters, onChange, tags, tagFilter, onTagFilterChange }: Props) {
   const keywordId = useId();
   const active =
-    filters.months.length > 0 || filters.sources.length !== SOURCES.length || filters.keyword.trim() !== '';
+    filters.months.length > 0 ||
+    filters.sources.length !== SOURCES.length ||
+    filters.keyword.trim() !== '' ||
+    tagFilter.length > 0;
+
+  const toggleTag = (id: string) =>
+    onTagFilterChange(tagFilter.includes(id) ? tagFilter.filter((t) => t !== id) : [...tagFilter, id]);
 
   const toggleMonth = (month: string) => {
     const has = filters.months.includes(month);
@@ -42,7 +55,10 @@ export function FilterBar({ months, filters, onChange }: Props) {
           type="button"
           className="btn btn-small btn-ghost"
           disabled={!active}
-          onClick={() => onChange({ months: [], sources: [...SOURCES], keyword: '' })}
+          onClick={() => {
+            onChange({ months: [], sources: [...SOURCES], keyword: '' });
+            onTagFilterChange([]);
+          }}
         >
           条件をリセット
         </button>
@@ -80,6 +96,23 @@ export function FilterBar({ months, filters, onChange }: Props) {
             onChange={(e) => onChange({ ...filters, keyword: e.target.value })}
           />
         </div>
+        {tags.length > 0 && (
+          <fieldset className="filter-tags">
+            <legend>タグ（未選択なら全て。複数選ぶといずれかが付いた明細）</legend>
+            <div className="checks">
+              {tags.map((tag) => (
+                <label key={tag.id} className="check">
+                  <input type="checkbox" checked={tagFilter.includes(tag.id)} onChange={() => toggleTag(tag.id)} />
+                  <TagChip tag={tag} />
+                </label>
+              ))}
+              <label className="check">
+                <input type="checkbox" checked={tagFilter.includes(UNTAGGED)} onChange={() => toggleTag(UNTAGGED)} />
+                タグなし
+              </label>
+            </div>
+          </fieldset>
+        )}
       </div>
     </section>
   );

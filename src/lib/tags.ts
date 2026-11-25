@@ -58,8 +58,29 @@ export function createTagId(): string {
 // キー
 // ---------------------------------------------------------------------------
 
+/**
+ * cyrb53: 文字列から53ビットのハッシュを作る（暗号用ではない。キーの衝突を避けるためだけに使う）。
+ * 取引の日付・摘要・金額をlocalStorageに読める形で残さないために、明細キーをハッシュにする。
+ */
+function hash53(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/**
+ * 取引の手動タグの識別キー。同じ取引元・日付・摘要・金額の明細は同じキーになる。
+ * 日付・摘要・金額そのものは保存せず、そのハッシュだけを `tx:` つきで返す。
+ */
 export function transactionKey(tx: Transaction): string {
-  return `${tx.source}|${tx.date}|${tx.description}|${tx.expense}|${tx.income}`;
+  return `tx:${hash53(`${tx.source}|${tx.date}|${tx.description}|${tx.expense}|${tx.income}`)}`;
 }
 
 export function provisionalKey(p: Pick<ProvisionalPayment, 'id'>): string {
