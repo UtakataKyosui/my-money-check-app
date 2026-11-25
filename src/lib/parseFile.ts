@@ -73,6 +73,30 @@ function detectKind(header: string[]): SourceKind | null {
   return null;
 }
 
+/** 見出し「◯月支払金額」の列（最初の1つ）の位置と月。なければ null。 */
+function findPaymentColumn(header: string[]): { index: number; label: string; month: number } | null {
+  for (let i = 0; i < header.length; i++) {
+    const m = /^(\d{1,2})月支払金額$/.exec(header[i] as string);
+    if (m) return { index: i, label: header[i] as string, month: Number(m[1]) };
+  }
+  return null;
+}
+
+/**
+ * カードCSVの支払い月（YYYY-MM）を、見出し「◯月支払金額」の月と取引の最終利用日から推定する。
+ * 利用日の年月 (Y, M) に対し、N >= M なら Y 年、N < M なら翌年。判定できなければ undefined。
+ * transactions は日付昇順であること。
+ */
+function detectPaymentMonth(n: number | null, transactions: Transaction[]): string | undefined {
+  if (n === null || n < 1 || n > 12) return undefined;
+  const last = transactions[transactions.length - 1];
+  if (!last) return undefined;
+  const y = Number(last.month.slice(0, 4));
+  const mo = Number(last.month.slice(5, 7));
+  const year = n >= mo ? y : y + 1;
+  return `${String(year).padStart(4, '0')}-${String(n).padStart(2, '0')}`;
+}
+
 /** CSV文字列を取引に正規化する。見出し行から銀行/カードを自動判定する。 */
 export function parseCsvText(text: string, fileName: string): ParsedFile {
   const rows = parseCsv(text);
@@ -90,6 +114,9 @@ export function parseCsvText(text: string, fileName: string): ParsedFile {
   const idx = (name: string): number => header.indexOf(name);
   const warnings: string[] = [];
   const transactions: Transaction[] = [];
+  const payCol = source === 'card' ? findPaymentColumn(header) : null;
+  // 「◯月支払金額」列の合計。取り込んだ行（読み飛ばしていない行）だけを数える
+  let paymentTotal = 0;
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r] as string[];
@@ -142,6 +169,17 @@ export function parseCsvText(text: string, fileName: string): ParsedFile {
         warnings.push(`${where}: 金額（${bad}）を解釈できないため読み飛ばしました。`);
         continue;
       }
+      if (payCol) {
+        const payRaw = row[payCol.index] ?? '';
+        const pay = parseAmount(payRaw, true);
+        if (pay === null) {
+          warnings.push(
+            `${where}: 「${payCol.label}」の金額「${payRaw.trim()}」を解釈できないため、0円として数えました。`,
+          );
+        } else {
+          paymentTotal += pay;
+        }
+      }
       const totalEmpty = cell('支払総額').trim() === '';
       const net = totalEmpty ? usage + fee : total;
       transactions.push({
@@ -161,5 +199,13 @@ export function parseCsvText(text: string, fileName: string): ParsedFile {
   // Array.prototype.sort は安定なので、同日はファイル順が保たれる
   transactions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
-  return { fileName, source, transactions, warnings };
+  const result: ParsedFile = { fileName, source, transactions, warnings };
+  if (source === 'card') {
+    const paymentMonth = detectPaymentMonth(payCol?.month ?? null, transactions);
+    if (paymentMonth) {
+      result.paymentMonth = paymentMonth;
+      result.paymentTotal = paymentTotal;
+    }
+  }
+  return result;
 }

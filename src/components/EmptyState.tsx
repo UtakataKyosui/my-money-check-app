@@ -13,7 +13,7 @@ export function EmptyState({ onLoadSample }: Props) {
       </ol>
       <p className="muted">
         銀行かカードかは見出しから自動で判定します。文字コードはUTF-8とShift_JISに対応しています。
-        読み込んだデータはこのブラウザの中だけで処理され、サーバーへの送信や保存は行いません。
+        読み込んだCSVのデータはこのブラウザの中だけで処理され、サーバーへの送信や保存は行いません。
       </p>
       <p>
         <button type="button" className="btn" onClick={onLoadSample}>

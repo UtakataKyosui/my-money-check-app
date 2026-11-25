@@ -1,9 +1,9 @@
-import type { MonthlySummary } from '../types';
 import { formatMonth, formatSignedYen, formatYen } from '../lib/format';
+import type { MonthlyRow } from '../lib/provisional';
 import { MonthlyChart } from './MonthlyChart';
 
 interface Props {
-  rows: MonthlySummary[];
+  rows: MonthlyRow[];
 }
 
 export function MonthlyTable({ rows }: Props) {
@@ -11,7 +11,7 @@ export function MonthlyTable({ rows }: Props) {
     <section className="panel" aria-labelledby="monthly-title">
       <h2 id="monthly-title">月別サマリー</h2>
       {rows.length === 0 ? (
-        <p className="muted">条件に合う明細がありません。</p>
+        <p className="muted">条件に合う明細・暫定支払いがありません。</p>
       ) : (
         <>
           <MonthlyChart rows={rows} />
@@ -26,6 +26,7 @@ export function MonthlyTable({ rows }: Props) {
                   <th scope="col" className="num">銀行の支出</th>
                   <th scope="col" className="num">カードの支出</th>
                   <th scope="col" className="num">件数</th>
+                  <th scope="col" className="num">暫定支払い（手入力）</th>
                 </tr>
               </thead>
               <tbody>
@@ -38,6 +39,17 @@ export function MonthlyTable({ rows }: Props) {
                     <td className="num">{formatYen(r.bankExpense)}</td>
                     <td className="num">{formatYen(r.cardExpense)}</td>
                     <td className="num">{r.count.toLocaleString('ja-JP')}</td>
+                    <td className="num">
+                      {formatYen(r.provisional)}
+                      {r.provisionalCount > 0 && (
+                        <span className="cell-sub muted">
+                          確定 {formatYen(r.provisionalConfirmed)} / 見込み {formatYen(r.provisionalEstimated)}
+                        </span>
+                      )}
+                      {r.provisionalFromCsv > 0 && (
+                        <span className="cell-sub muted">CSV確定 {formatYen(r.provisionalFromCsv)}（確定に含む）</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
