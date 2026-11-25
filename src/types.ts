@@ -38,6 +38,11 @@ export interface ParsedFile {
   transactions: Transaction[];
   /** 読み飛ばした行の警告（日本語メッセージ） */
   warnings: string[];
+  /**
+   * カードのみ: このCSVの支払い月 YYYY-MM。見出しの「◯月支払金額」の月と
+   * 利用日から推定する。判定できなければ undefined。
+   */
+  paymentMonth?: string;
 }
 
 export interface MonthlySummary {
@@ -83,6 +88,15 @@ export interface ProvisionalPayment {
   /** true=金額が確定済み / false=見込み */
   confirmed: boolean;
   note?: string;
+  /** true なら、同じ支払いのCSVが読み込まれても暫定値を使い続ける（CSVによる置き換えを無効にする） */
+  pinned?: boolean;
+}
+
+/** CSVによって暫定値が置き換えられた（集計から外れた）項目 */
+export interface SupersededProvisional {
+  item: ProvisionalPayment;
+  /** 置き換えたCSVのファイル名 */
+  by: string;
 }
 
 export interface ProvisionalMonth {
