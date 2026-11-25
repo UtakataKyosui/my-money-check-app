@@ -237,9 +237,11 @@ describe('暫定支払い（手入力）', () => {
     expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('48,500円');
     expect(screen.getByTestId('summary-provisional-confirmed')).toHaveTextContent('48,500円');
     expect(screen.getByTestId('summary-provisional-estimated')).toHaveTextContent('0円');
-    // 既存の数値には混ぜない
-    expect(screen.getByTestId('summary-expense')).toHaveTextContent('0円');
-    expect(screen.getByTestId('summary-card-expense')).toHaveTextContent('0円');
+    // 暫定支払いは支出合計・収支に含まれ、銀行／カードの支出の内訳には混ぜない
+    expect(screen.getByTestId('summary-expense').textContent).toBe('48,500円');
+    expect(screen.getByTestId('summary-net').textContent).toBe('−48,500円');
+    expect(screen.getByTestId('summary-bank-expense').textContent).toBe('0円');
+    expect(screen.getByTestId('summary-card-expense').textContent).toBe('0円');
 
     // フォームはクリアされる（月は既定の今月に戻る）
     expect(screen.getByLabelText('支払先・内容')).toHaveValue('');
@@ -395,18 +397,21 @@ describe('暫定支払い（手入力）', () => {
     expect(row).toHaveTextContent('確定 48,500円 / 見込み 3,000円');
   });
 
-  it('月別サマリーは暫定のみの月も行になり、CSVの列の意味は変わらない', async () => {
+  it('月別サマリーは暫定のみの月も行になり、銀行／カードの列はCSV由来のまま、支出・収支には暫定を含む', async () => {
     const user = userEvent.setup();
     render(<App />);
     await loadSample(user);
-    const expenseBefore = screen.getByTestId('summary-expense').textContent;
+    expect(screen.getByTestId('summary-expense').textContent).toBe('395,750円');
 
     await addProvisional(user, { month: '2027-02', label: '自動車税', amount: '30500', kind: 'その他' });
 
     const summary = screen.getByRole('region', { name: '月別サマリーの表' });
     const row = within(summary).getByRole('row', { name: /2027年2月/ });
-    expect(row).toHaveTextContent('30,500円');
-    expect(screen.getByTestId('summary-expense').textContent).toBe(expenseBefore);
+    // 収入 / 支出 / 収支 / 銀行の支出 / カードの支出 / 件数 / 暫定支払い
+    const cells = within(row).getAllByRole('cell').map((c) => c.textContent);
+    expect(cells.slice(0, 6)).toEqual(['0円', '30,500円', '−30,500円', '0円', '0円', '0']);
+    expect(cells[6]).toContain('30,500円');
+    expect(screen.getByTestId('summary-expense').textContent).toBe('426,250円');
     expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('30,500円');
   });
 
@@ -668,5 +673,136 @@ describe('CSVによる暫定支払いの置き換え', () => {
     // 銀行CSVはカード種別の暫定値には影響しない
     await addProvisional(user, { month: '2026-11', label: 'カード請求', amount: '1000' });
     expect(screen.getByTestId('summary-provisional-total')).toHaveTextContent('86,000円');
+  });
+});
+
+describe('暫定支払いの支出合計・収支への反映', () => {
+  const text = (id: string) => screen.getByTestId(id).textContent;
+  const monthRow = (label: RegExp) =>
+    within(within(screen.getByRole('region', { name: '月別サマリーの表' })).getByRole('row', { name: label }))
+      .getAllByRole('cell')
+      .map((c) => c.textContent ?? '');
+
+  it('CSVが無く暫定だけのとき、支出合計＝暫定合計（確定＋見込み）、収支＝−暫定合計', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '楽天カード 11月分', amount: '48500' });
+    await addProvisional(user, { month: '2026-12', label: '水道代', amount: '3000', state: '見込み' });
+
+    expect(text('summary-income')).toBe('0円');
+    expect(text('summary-expense')).toBe('51,500円');
+    expect(text('summary-net')).toBe('−51,500円');
+    expect(text('summary-bank-expense')).toBe('0円');
+    expect(text('summary-card-expense')).toBe('0円');
+    expect(text('summary-provisional-expense')).toBe('51,500円');
+    expect(text('summary-provisional-total')).toBe('51,500円');
+    expect(screen.getByRole('heading', { name: /暫定支払い（手入力・支出合計に含まれます）/ })).toBeInTheDocument();
+  });
+
+  it('CSVと暫定があるとき、支出合計＝銀行＋カード＋暫定、収支＝収入−支出合計（見込みも含む）', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    // サンプル: 収入 560,000 / 銀行 329,240 / カード 66,510
+    expect(text('summary-expense')).toBe('395,750円');
+    expect(text('summary-net')).toBe('+164,250円');
+
+    await addProvisional(user, { month: '2026-11', label: '保険料', amount: '100000', kind: 'その他' });
+    expect(text('summary-income')).toBe('560,000円');
+    expect(text('summary-bank-expense')).toBe('329,240円');
+    expect(text('summary-card-expense')).toBe('66,510円');
+    expect(text('summary-provisional-expense')).toBe('100,000円');
+    expect(text('summary-expense')).toBe('495,750円');
+    expect(text('summary-net')).toBe('+64,250円');
+    expect(text('summary-count')).toBe('20件');
+
+    // 見込みも支出に含まれ、支出が収入を上回れば収支はマイナスになる
+    await addProvisional(user, { month: '2026-12', label: '旅行', amount: '80000', kind: 'その他', state: '見込み' });
+    expect(text('summary-provisional-expense')).toBe('180,000円');
+    expect(text('summary-expense')).toBe('575,750円');
+    expect(text('summary-net')).toBe('−15,750円');
+  });
+
+  it('CSVで置き換えられたカードの暫定は、CSVの支払額で表示されるが、支出合計には二重に加算されない', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '楽天カード 11月分', amount: '48500' });
+    expect(text('summary-expense')).toBe('48,500円');
+    expect(text('summary-provisional-expense')).toBe('48,500円');
+
+    await loadSample(user); // 11月支払金額の合計は 66,510円
+    // 暫定の枠にはCSVの支払額が表示されるが、その元の利用明細は「カードの支出」に入っているため加算しない
+    expect(text('summary-provisional-total')).toBe('66,510円');
+    expect(text('summary-provisional-expense')).toBe('0円');
+    // 銀行 329,240 + カード 66,510（暫定は加算しない）
+    expect(text('summary-expense')).toBe('395,750円');
+    expect(text('summary-net')).toBe('+164,250円');
+
+    await user.click(screen.getByRole('button', { name: 'sample-card.csvを削除' }));
+    // 暫定値に戻る: 銀行 329,240 + 暫定 48,500
+    expect(text('summary-expense')).toBe('377,740円');
+    expect(text('summary-provisional-expense')).toBe('48,500円');
+  });
+
+  it('銀行CSVで置き換えられた暫定は支出に含まれない', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await addProvisional(user, { month: '2026-11', label: '家賃', amount: '85000', kind: '銀行' });
+    await addProvisional(user, { month: '2026-12', label: '12月の家賃', amount: '85000', kind: '銀行' });
+    expect(text('summary-expense')).toBe('170,000円');
+
+    await user.upload(screen.getByLabelText('CSVファイルを選択'), csvFile('bank.csv', SAMPLE_BANK_CSV));
+    await screen.findByRole('heading', { name: '明細' });
+
+    // 銀行 329,240 + 置き換えられなかった12月分 85,000（11月分は含まれない）
+    expect(text('summary-bank-expense')).toBe('329,240円');
+    expect(text('summary-provisional-expense')).toBe('85,000円');
+    expect(text('summary-expense')).toBe('414,240円');
+    expect(text('summary-net')).toBe('+145,760円');
+  });
+
+  it('月別サマリー: CSVと暫定が同じ月にあれば合算され、銀行／カードの列はCSV由来のまま', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    // 11月: 収入 280,000 / 銀行 172,830 / カード(利用月) 35,310 / 件数 10
+    await addProvisional(user, { month: '2026-11', label: '保険料', amount: '10000', kind: 'その他' });
+
+    const cells = monthRow(/2026年11月/);
+    expect(cells.slice(0, 6)).toEqual(['280,000円', '218,140円', '+61,860円', '172,830円', '35,310円', '10']);
+    expect(cells[6]).toContain('10,000円');
+    // 暫定のない10月は変わらない
+    expect(monthRow(/2026年10月/).slice(0, 3)).toEqual(['280,000円', '187,610円', '+92,390円']);
+  });
+
+  it('月フィルタ・キーワードで、暫定の含まれ方が変わる', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await loadSample(user);
+    await addProvisional(user, { month: '2027-01', label: '固定資産税', amount: '60000', kind: 'その他' });
+    await addProvisional(user, { month: '2026-11', label: '保険料', amount: '10000', kind: 'その他' });
+    expect(text('summary-expense')).toBe('465,750円');
+
+    // 月: 2027年1月だけ → CSVなし、暫定 60,000 のみ
+    await user.click(screen.getByRole('checkbox', { name: '2027年1月' }));
+    expect(text('summary-expense')).toBe('60,000円');
+    expect(text('summary-net')).toBe('−60,000円');
+    await user.click(screen.getByRole('checkbox', { name: '2027年1月' }));
+
+    // 月: 2026年11月だけ → 11月のCSV支出 208,140 + 暫定 10,000
+    await user.click(screen.getByRole('checkbox', { name: '2026年11月' }));
+    expect(text('summary-expense')).toBe('218,140円');
+    expect(text('summary-net')).toBe('+61,860円');
+    await user.click(screen.getByRole('checkbox', { name: '2026年11月' }));
+
+    // キーワード: 摘要に一致した暫定支払いだけが含まれる
+    await user.type(screen.getByRole('searchbox', { name: /キーワード/ }), '固定資産税');
+    expect(text('summary-count')).toBe('0件');
+    expect(text('summary-expense')).toBe('60,000円');
+    expect(text('summary-provisional-expense')).toBe('60,000円');
+    await user.clear(screen.getByRole('searchbox', { name: /キーワード/ }));
+    await user.type(screen.getByRole('searchbox', { name: /キーワード/ }), 'ガス料金');
+    expect(text('summary-expense')).toBe('5,400円');
+    expect(text('summary-provisional-expense')).toBe('0円');
   });
 });

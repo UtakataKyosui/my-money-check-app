@@ -276,6 +276,58 @@ export function mergeMonthlyWithProvisional(
   });
 }
 
+/** 概要に表示する合計。支出・収支には暫定支払い（確定・見込みの両方）を含む。 */
+export interface CombinedTotals {
+  income: number;
+  /** CSVの支出 + 暫定支払い */
+  expense: number;
+  /** income - expense */
+  net: number;
+  /** CSVの取引件数（暫定支払いは数えない） */
+  count: number;
+  /** expense のうち、手入力の暫定支払いの分 */
+  provisionalExpense: number;
+}
+
+/**
+ * CSVの合計（totals の結果）と暫定支払いの合計（provisionalTotals の結果）から、
+ * 概要に表示する合計を作る。暫定支払いは effective（CSVの支払額で上書き済み・銀行CSVで
+ * 置き換え済みを除いたもの）を絞り込んだ一覧から集計したものを渡す。
+ */
+export function combineTotals(
+  csv: { income: number; expense: number; count: number },
+  prov: { total: number },
+): CombinedTotals {
+  const expense = csv.expense + prov.total;
+  return {
+    income: csv.income,
+    expense,
+    net: csv.income - expense,
+    count: csv.count,
+    provisionalExpense: prov.total,
+  };
+}
+
+/** 月別サマリーの表示用の行。expense / net は CSV のみ、totalExpense / totalNet は暫定支払いを含む。 */
+export interface MonthlyDisplayRow extends MonthlyRow {
+  /** expense + provisional */
+  totalExpense: number;
+  /** income - totalExpense */
+  totalNet: number;
+}
+
+/**
+ * 各月の支出・収支に、その月の暫定支払いを含めた値を足す。入力は変更しない。
+ * CSVの支払額で上書きした分（provisionalFromCsv）は、元のCSVの利用明細が利用月の支出に
+ * すでに入っているため加算しない（二重計上を避ける）。
+ */
+export function withProvisionalExpense(rows: MonthlyRow[]): MonthlyDisplayRow[] {
+  return rows.map((r) => {
+    const totalExpense = r.expense + r.provisional - r.provisionalFromCsv;
+    return { ...r, totalExpense, totalNet: r.income - totalExpense };
+  });
+}
+
 /** CSV由来の月と暫定支払いの月の和集合（昇順・重複なし）。 */
 export function listAllMonths(txMonths: string[], items: ProvisionalPayment[]): string[] {
   return [...new Set([...txMonths, ...items.map((p) => p.month)])].sort(compareString);
